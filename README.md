@@ -119,3 +119,7 @@ bun neru.ts \
 
 The proof-of-concept path is not the production architecture and must never be
 treated as a second writable mikuOS installation.
+
+## Licence
+
+[MIT](LICENSE), subject to the existing file-level licences and [GPL-licensed components](LICENSES/README.md).
