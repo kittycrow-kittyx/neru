@@ -1,3 +1,4 @@
+import type { NeruRuntimeBuildOptions } from "./src/types.js";
 import { optionValue } from "./src/args.js";
 import {
   artifactPaths,
@@ -55,7 +56,7 @@ if (!skipBuild && !pocImage && filesystemRoot) {
 }
 
 if (!skipBuild) {
-  const common = {
+  const common: NeruRuntimeBuildOptions = {
     ...(output ? { output } : {}),
     ...(variant ? { variant } : {}),
     ...(workspace ? { workspace } : {}),

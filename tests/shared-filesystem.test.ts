@@ -10,7 +10,7 @@ import { NodeCheckpointStore } from "../src/fs/checkpoint.js";
 import { decideSharedBoot } from "../src/fs/boot-policy.js";
 import { FetchSharedFsClient } from "../src/fs/client.js";
 import { SharedFsHttpServer } from "../src/fs/server.js";
-import { SHARED_FS_SCHEMA, SharedFsError, decodeBytes, encodeBytes } from "../src/fs/protocol.js";
+import { SHARED_FS_SCHEMA, decodeBytes, encodeBytes } from "../src/fs/protocol.js";
 import type { SharedOperation } from "../src/fs/protocol.js";
 
 const lease = (fs: AuthoritativeFilesystem, clientId: string) => fs.createLease({ clientId, ttlMs: 60_000 });
@@ -65,7 +65,7 @@ test("3 and 5: concurrent independent files succeed and same-file stale writes c
   await commit(fs, "left", left.leaseId, fs.snapshot().generation, [{ op: "write", path: inode.path, offset: 0, truncate: true, expectedVersion: inode.version, data: encodeBytes(new TextEncoder().encode("new")) }]);
   await assert.rejects(
     commit(fs, "right", right.leaseId, base, [{ op: "write", path: inode.path, offset: 0, truncate: true, expectedVersion: inode.version, data: encodeBytes(new TextEncoder().encode("lost")) }]),
-    (error) => error instanceof SharedFsError && error.code === "ESTALE",
+    { name: "SharedFsError", code: "ESTALE" },
   );
   assert.equal(text(fs, inode.path), "new");
 });
@@ -121,7 +121,7 @@ test("9: kernel-local roots never enter the shared generation", async () => {
   const fs = await setup();
   const client = lease(fs, "kernel-local");
   for (const path of ["/dev/x", "/proc/x", "/sys/x", "/run/x", "/tmp/x"]) {
-    await assert.rejects(commit(fs, "kernel-local", client.leaseId, fs.snapshot().generation, [{ op: "create", path, kind: "file", mode: 0o600, uid: 0, gid: 0, data: "" }]), (error) => error instanceof SharedFsError && error.code === "EROFS");
+    await assert.rejects(commit(fs, "kernel-local", client.leaseId, fs.snapshot().generation, [{ op: "create", path, kind: "file", mode: 0o600, uid: 0, gid: 0, data: "" }]), { name: "SharedFsError", code: "EROFS" });
   }
 });
 
