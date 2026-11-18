@@ -43,6 +43,13 @@ regression testing. It is not required by the live-root runtime.
 - [Architecture](docs/ARCHITECTURE.md)
 - [Shared filesystem](docs/SHARED_USERSPACE.md)
 
+## Host runtime
+
+The terminal launcher uses Node.js and `ts-node` to execute the TypeScript
+worker and filesystem adapters directly. `npm run check:runtime` checks
+these sources without emitting JavaScript. The pinned Linux-WASM host
+scripts remain upstream artefacts.
+
 ## Licence
 
 [MIT](LICENSE), except for files with other declarations. See the

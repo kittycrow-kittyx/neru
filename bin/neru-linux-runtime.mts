@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // SPDX-License-Identifier: GPL-2.0-only
 
 import { readFile } from "node:fs/promises";
@@ -13,12 +12,12 @@ const UPSTREAM_WORKER = fileURLToPath(
   new URL("../vendor/linux-wasm/runtime/linux-worker.js", import.meta.url),
 );
 const WORKER_BOOTSTRAP = new URL(
-  "../runtime/node-worker-bootstrap.mjs",
+  "../runtime/node-worker-bootstrap.mts",
   import.meta.url,
 );
 
 const args = process.argv.slice(2);
-const value = (name) => {
+const value = (name: string): string | undefined => {
   const joined = args.find((argument) => argument.startsWith(`${name}=`));
   if (joined) return joined.slice(name.length + 1);
   const index = args.indexOf(name);
@@ -68,22 +67,24 @@ const filesystem = initramfsPath
         clientId: process.env.NERU_FS_CLIENT_ID,
       };
 
-const workers = new Set();
+const workers = new Set<NodeWorker>();
+
+type MessageHandler = (event: { data: unknown }) => void;
+type ErrorHandler = (error: unknown) => void;
 
 class WorkerAdapter {
-  #worker;
-  #onmessage;
-  #onmessageerror;
-  #onerror;
+  #worker: NodeWorker;
+  #onmessage: MessageHandler | null | undefined;
+  #onmessageerror: ErrorHandler | null | undefined;
+  #onerror: ErrorHandler | null | undefined;
 
-  constructor(_url, options = {}) {
+  constructor(_url: string | URL, options: { name?: string } = {}) {
     this.#worker = new NodeWorker(WORKER_BOOTSTRAP, {
-      name: options.name,
+      ...(options.name === undefined ? {} : { name: options.name }),
       workerData: {
         upstreamWorker: UPSTREAM_WORKER,
         filesystem,
       },
-      type: "module",
     });
 
     workers.add(this.#worker);
@@ -97,10 +98,10 @@ class WorkerAdapter {
     });
   }
 
-  set onmessage(handler) { this.#onmessage = handler; }
-  set onmessageerror(handler) { this.#onmessageerror = handler; }
-  set onerror(handler) { this.#onerror = handler; }
-  postMessage(message) { this.#worker.postMessage(message); }
+  set onmessage(handler: MessageHandler | null) { this.#onmessage = handler; }
+  set onmessageerror(handler: ErrorHandler | null) { this.#onmessageerror = handler; }
+  set onerror(handler: ErrorHandler | null) { this.#onerror = handler; }
+  postMessage(message: unknown) { this.#worker.postMessage(message); }
   terminate() {
     workers.delete(this.#worker);
     return this.#worker.terminate();
@@ -130,7 +131,7 @@ const restoreTerminal = () => {
   }
 };
 
-const longestShutdownPrefixSuffix = (value) => {
+const longestShutdownPrefixSuffix = (value: string): number => {
   const maximum = Math.min(value.length, SHUTDOWN_PREFIX.length - 1);
 
   for (let length = maximum; length > 0; length -= 1) {
@@ -140,7 +141,7 @@ const longestShutdownPrefixSuffix = (value) => {
   return 0;
 };
 
-const stopLinux = async (requestedStatus) => {
+const stopLinux = async (requestedStatus: number): Promise<void> => {
   if (shuttingDown) return;
   shuttingDown = true;
 
@@ -166,7 +167,7 @@ const stopLinux = async (requestedStatus) => {
   process.exit(status);
 };
 
-const writeGuestConsole = (message) => {
+const writeGuestConsole = (message: unknown): void => {
   if (shuttingDown) return;
 
   pendingConsole += String(message);
@@ -227,18 +228,22 @@ runInThisContext(
   `${upstreamSource}\n;globalThis.__neruLinux = linux;`,
   { filename: UPSTREAM_LINUX },
 );
-const linux = globalThis.__neruLinux;
-delete globalThis.__neruLinux;
-if (typeof linux !== "function") {
+const globals = globalThis as typeof globalThis & { __neruLinux?: unknown };
+const linuxValue = globals.__neruLinux;
+delete globals.__neruLinux;
+if (typeof linuxValue !== "function") {
   throw new Error("Pinned Linux-WASM runtime did not expose its Linux launcher");
 }
 
-const kernelBytes = await readFile(kernelPath);
+type LinuxLauncher = (
+  worker: string, variant: "wasm32_nommu" | "wasm64_nommu", kernel: WebAssembly.Module,
+  commandLine: string, initramfs: ArrayBuffer, diagnostic: (message: unknown) => void,
+  consoleOutput: (message: unknown) => void,
+) => Promise<{ key_input(value: string): void }>;
+const linux = linuxValue as LinuxLauncher;
+const kernelBytes = Uint8Array.from(await readFile(kernelPath));
 const initramfs = initramfsPath
-  ? await readFile(initramfsPath).then((bytes) => bytes.buffer.slice(
-      bytes.byteOffset,
-      bytes.byteOffset + bytes.byteLength,
-    ))
+  ? Uint8Array.from(await readFile(initramfsPath)).buffer
   : new ArrayBuffer(0);
 const kernel = await WebAssembly.compile(kernelBytes);
 const commandLine = value("--cmdline") ?? (
@@ -258,7 +263,7 @@ const machine = await linux(
   kernel,
   commandLine,
   initramfs,
-  (message) => {
+  (message: unknown) => {
     if (verbose) process.stderr.write(`neru: ${message}\n`);
   },
   writeGuestConsole,

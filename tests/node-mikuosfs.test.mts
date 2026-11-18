@@ -9,17 +9,17 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { createNodeMikuosFs } from "../runtime/node-mikuosfs.mjs";
+import { createNodeMikuosFs } from "../runtime/node-mikuosfs.mts";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-const put = (memory, pointer, value) => {
+const put = (memory: WebAssembly.Memory, pointer: number, value: string) => {
   const bytes = encoder.encode(`${value}\0`);
   new Uint8Array(memory.buffer, pointer, bytes.length).set(bytes);
 };
 
-const get = (memory, pointer) => {
+const get = (memory: WebAssembly.Memory, pointer: number) => {
   const bytes = new Uint8Array(memory.buffer);
   let end = pointer;
   while (bytes[end] !== 0) end++;

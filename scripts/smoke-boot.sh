@@ -31,7 +31,7 @@ CMDLINE="maxcpus=3 nohz_full=0,2-63 rcu_nocbs=0,2-63 root=/dev/ram0 rootfstype=r
 
 set +e
 timeout --signal=TERM --kill-after=10 "$TIMEOUT_SECONDS" \
-    node "$ROOT/bin/neru-linux-runtime.mjs" \
+    "$ROOT/bin/neru-linux-runtime" \
         --kernel "$KERNEL" \
         --initramfs "$INITRAMFS" \
         --variant "$VARIANT" \

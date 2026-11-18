@@ -49,7 +49,7 @@ export function resolveLinuxRuntime(explicit?: string): string {
   const configured = explicit ?? process.env.NERU_LINUX_RUNTIME;
   return configured
     ? resolve(configured)
-    : join(packageRoot, "bin", "neru-linux-runtime.mjs");
+    : join(packageRoot, "bin", "neru-linux-runtime");
 }
 
 const cleanEnvironment = (

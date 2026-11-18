@@ -21,7 +21,7 @@ const fixture = async () => {
 
 test("ships the terminal Linux-WASM runtime", async () => {
   const executable = resolveLinuxRuntime();
-  assert.match(executable, /neru-linux-runtime\.mjs$/);
+  assert.match(executable, /neru-linux-runtime$/);
   await access(executable, constants.X_OK);
 });
 

@@ -14,7 +14,7 @@ root=mikuos rootfstype=mikuosfs rw init=/sbin/nemunemu
 
 The `rw` request describes the intended mount configuration, not the current
 write support. `kernel/mikuosfs.c` exposes metadata, directory enumeration,
-file reads and symbolic links. `runtime/node-mikuosfs.mjs` implements the
+file reads and symbolic links. `runtime/node-mikuosfs.mts` implements the
 local directory callbacks. The built-in driver is read-only at present.
 
 The Node launch path accepts a local directory. The CLI and browser can carry

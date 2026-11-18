@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export TS_NODE_PROJECT="$root/tsconfig.runtime.json"
+export TS_NODE_TRANSPILE_ONLY=true
+exec node --loader "$root/node_modules/ts-node/esm.mjs" "$root/bin/neru-linux-runtime.mts" "$@"

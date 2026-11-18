@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "allowImportingTsExtensions": true
+  },
+  "include": [
+    "bin/**/*.mts",
+    "runtime/**/*.mts",
+    "tests/**/*.test.mts"
+  ]
+}

@@ -4,10 +4,12 @@ import { webcrypto } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { runInThisContext } from "node:vm";
 import { parentPort, workerData } from "node:worker_threads";
-import { createNodeMikuosFs } from "./node-mikuosfs.mjs";
+import { createNodeMikuosFs } from "./node-mikuosfs.mts";
 
-if (!parentPort) throw new Error("NERU Linux worker has no parent port");
-if (!workerData?.upstreamWorker) {
+const port = parentPort;
+if (!port) throw new Error("NERU Linux worker has no parent port");
+const data: unknown = workerData;
+if (typeof data !== "object" || data === null || !("upstreamWorker" in data) || typeof data.upstreamWorker !== "string" || !data.upstreamWorker) {
   throw new Error("NERU Linux worker was not given the pinned upstream worker path");
 }
 
@@ -15,8 +17,11 @@ if (!globalThis.crypto) {
   Object.defineProperty(globalThis, "crypto", { value: webcrypto });
 }
 
-const filesystemConfig = workerData.filesystem ?? null;
-const filesystem = filesystemConfig?.kind === "directory"
+const upstreamWorker = data.upstreamWorker;
+const filesystemConfig = "filesystem" in data ? data.filesystem ?? null : null;
+const filesystem = filesystemConfig !== null && typeof filesystemConfig === "object" &&
+  "kind" in filesystemConfig && filesystemConfig.kind === "directory" &&
+  "root" in filesystemConfig && typeof filesystemConfig.root === "string"
   ? createNodeMikuosFs(filesystemConfig.root)
   : null;
 
@@ -33,19 +38,21 @@ Object.defineProperty(globalThis, "__neruFsSync", {
   value: filesystem,
 });
 
-let onmessage = null;
-let onmessageerror = null;
-const pending = [];
+type MessageHandler = (event: { data: unknown }) => void;
+type ErrorHandler = (error: unknown) => void;
+let onmessage: MessageHandler | null = null;
+let onmessageerror: ErrorHandler | null = null;
+const pending: unknown[] = [];
 
 const selfShim = {
-  postMessage(message) {
-    parentPort.postMessage(message);
+  postMessage(message: unknown) {
+    port.postMessage(message);
   },
 };
 
 Object.defineProperty(selfShim, "onmessage", {
   get: () => onmessage,
-  set: (handler) => {
+  set: (handler: MessageHandler | null) => {
     onmessage = handler;
     while (onmessage && pending.length) {
       onmessage({ data: pending.shift() });
@@ -55,7 +62,7 @@ Object.defineProperty(selfShim, "onmessage", {
 
 Object.defineProperty(selfShim, "onmessageerror", {
   get: () => onmessageerror,
-  set: (handler) => {
+  set: (handler: ErrorHandler | null) => {
     onmessageerror = handler;
   },
 });
@@ -65,11 +72,11 @@ Object.defineProperty(globalThis, "self", {
   value: selfShim,
 });
 
-parentPort.on("message", (data) => {
+port.on("message", (data) => {
   if (onmessage) onmessage({ data });
   else pending.push(data);
 });
-parentPort.on("messageerror", (error) => {
+port.on("messageerror", (error) => {
   if (onmessageerror) onmessageerror(error);
   else throw error;
 });
@@ -93,9 +100,9 @@ const hooks = `    // Host callbacks used by NERU's built-in mikuosfs driver.\n\
 `        ? globalThis.__neruFsSync.readlink(memory, path, buffer, count)\n` +
 `        : -19,\n\n`;
 
-const upstream = await readFile(workerData.upstreamWorker, "utf8");
+const upstream = await readFile(upstreamWorker, "utf8");
 if (!upstream.includes(marker)) {
   throw new Error("Pinned Linux-WASM worker no longer exposes the expected driver hook marker");
 }
 const source = upstream.replace(marker, hooks + marker);
-runInThisContext(source, { filename: workerData.upstreamWorker });
+runInThisContext(source, { filename: upstreamWorker });

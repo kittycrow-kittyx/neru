@@ -23,12 +23,15 @@ const ERRNO = Object.freeze({
 
 const decoder = new TextDecoder("utf-8");
 
-const errorCode = (error) => {
-  const code = error && typeof error === "object" ? error.code : undefined;
-  return ERRNO[code] ?? ERRNO.EIO;
+type GuestWord = number | bigint;
+
+const errorCode = (error: unknown): number => {
+  const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+  return typeof code === "string" && Object.hasOwn(ERRNO, code)
+    ? ERRNO[code as keyof typeof ERRNO] : ERRNO.EIO;
 };
 
-const cstring = (memory, pointerValue) => {
+const cstring = (memory: WebAssembly.Memory, pointerValue: GuestWord) => {
   const pointer = Number(pointerValue);
   const bytes = new Uint8Array(memory.buffer);
   let end = pointer;
@@ -39,7 +42,7 @@ const cstring = (memory, pointerValue) => {
   return decoder.decode(bytes.subarray(pointer, end));
 };
 
-const writeBytes = (memory, pointerValue, capacityValue, source) => {
+const writeBytes = (memory: WebAssembly.Memory, pointerValue: GuestWord, capacityValue: GuestWord, source: Uint8Array) => {
   const pointer = Number(pointerValue);
   const capacity = Number(capacityValue);
   if (source.length >= capacity) return ERRNO.ENAMETOOLONG;
@@ -49,14 +52,14 @@ const writeBytes = (memory, pointerValue, capacityValue, source) => {
   return source.length;
 };
 
-const inside = (root, candidate) =>
+const inside = (root: string, candidate: string) =>
   candidate === root || candidate.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
 
-export function createNodeMikuosFs(rootValue) {
+export function createNodeMikuosFs(rootValue: string) {
   const root = realpathSync.native(resolve(rootValue));
   const encoder = new TextEncoder();
 
-  const lexical = (guestPath) => {
+  const lexical = (guestPath: string) => {
     if (!guestPath.startsWith("/") || guestPath.includes("\0")) {
       throw Object.assign(new Error("invalid guest path"), { code: "EACCES" });
     }
@@ -67,7 +70,7 @@ export function createNodeMikuosFs(rootValue) {
     return candidate;
   };
 
-  const finalPath = (guestPath) => {
+  const finalPath = (guestPath: string) => {
     const candidate = lexical(guestPath);
     const resolved = realpathSync.native(candidate);
     if (!inside(root, resolved)) {
@@ -76,7 +79,7 @@ export function createNodeMikuosFs(rootValue) {
     return resolved;
   };
 
-  const lstatPath = (guestPath) => {
+  const lstatPath = (guestPath: string) => {
     const candidate = lexical(guestPath);
     if (candidate === root) return candidate;
     const parent = realpathSync.native(dirname(candidate));
@@ -86,7 +89,7 @@ export function createNodeMikuosFs(rootValue) {
     return candidate;
   };
 
-  const guestLink = (target) => {
+  const guestLink = (target: string) => {
     if (!isAbsolute(target)) return target;
     const resolved = resolve(target);
     if (!inside(root, resolved)) return target;
@@ -95,7 +98,7 @@ export function createNodeMikuosFs(rootValue) {
   };
 
   return Object.freeze({
-    mode(memory, pathPointer) {
+    mode(memory: WebAssembly.Memory, pathPointer: GuestWord) {
       try {
         return Number(lstatSync(lstatPath(cstring(memory, pathPointer))).mode);
       } catch (error) {
@@ -103,7 +106,7 @@ export function createNodeMikuosFs(rootValue) {
       }
     },
 
-    size(memory, pathPointer) {
+    size(memory: WebAssembly.Memory, pathPointer: GuestWord) {
       try {
         return BigInt(lstatSync(lstatPath(cstring(memory, pathPointer))).size);
       } catch (error) {
@@ -111,8 +114,8 @@ export function createNodeMikuosFs(rootValue) {
       }
     },
 
-    read(memory, pathPointer, offsetValue, bufferPointer, countValue) {
-      let descriptor;
+    read(memory: WebAssembly.Memory, pathPointer: GuestWord, offsetValue: GuestWord, bufferPointer: GuestWord, countValue: GuestWord) {
+      let descriptor: number | undefined;
       try {
         const path = finalPath(cstring(memory, pathPointer));
         const offset = Number(offsetValue);
@@ -130,7 +133,7 @@ export function createNodeMikuosFs(rootValue) {
       }
     },
 
-    readdir(memory, pathPointer, indexValue, bufferPointer, countValue) {
+    readdir(memory: WebAssembly.Memory, pathPointer: GuestWord, indexValue: GuestWord, bufferPointer: GuestWord, countValue: GuestWord) {
       try {
         const path = finalPath(cstring(memory, pathPointer));
         const index = Number(indexValue);
@@ -138,19 +141,20 @@ export function createNodeMikuosFs(rootValue) {
           .filter((name) => name !== ".thistle-meta.json" && name !== ".thistle-meta.json.tmp")
           .sort();
         if (!Number.isSafeInteger(index) || index < 0) return ERRNO.EIO;
-        if (index >= entries.length) return 0;
+        const entry = entries[index];
+        if (entry === undefined) return 0;
         return writeBytes(
           memory,
           bufferPointer,
           countValue,
-          encoder.encode(entries[index]),
+          encoder.encode(entry),
         );
       } catch (error) {
         return errorCode(error);
       }
     },
 
-    readlink(memory, pathPointer, bufferPointer, countValue) {
+    readlink(memory: WebAssembly.Memory, pathPointer: GuestWord, bufferPointer: GuestWord, countValue: GuestWord) {
       try {
         const path = lstatPath(cstring(memory, pathPointer));
         return writeBytes(
