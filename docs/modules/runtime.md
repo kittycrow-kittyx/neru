@@ -7,3 +7,5 @@
 - `planNeruBoot` constructs the process arguments and environment.
 - `probeNeru` verifies access to the executable and selected kernel files.
 - `bootNeru` starts the launcher with inherited standard streams and resolves its exit status.
+
+A kernel-only boot plan has a null initramfs path.

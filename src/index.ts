@@ -34,3 +34,5 @@ export type {
   NeruBrowserMachine,
   NeruLinuxBrowserRuntime,
 } from "./browser.js";
+
+export { defaultBootOptions, defaultBuildOptions } from "./types.js";

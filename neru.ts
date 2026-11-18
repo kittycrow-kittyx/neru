@@ -1,3 +1,4 @@
+import { defaultBootOptions } from "./src/types.js";
 import type { NeruRuntimeBuildOptions } from "./src/types.js";
 import { optionValue } from "./src/args.js";
 import {
@@ -34,11 +35,11 @@ if (args.includes("--help") || args.includes("-h")) {
 const variant = option("--variant");
 if (variant !== null && variant !== "wasm32_nommu" && variant !== "wasm64_nommu") throw new Error(`Unsupported Linux-WASM variant: ${variant}`);
 
-const userland = option("--userland") ?? process.env.NERU_USERLAND;
+const userland = option("--userland") ?? (process.env.NERU_USERLAND ?? null);
 const output =
   option("--output")
   ?? option("--artifact-root")
-  ?? process.env.NERU_ARTIFACT_ROOT;
+  ?? (process.env.NERU_ARTIFACT_ROOT ?? null);
 
 const workspace = option("--workspace");
 const filesystemRoot = option("--fs-root");
@@ -50,16 +51,16 @@ let artifactRoot = output;
 
 if (!skipBuild && !pocImage && filesystemRoot) {
   await prepareNeruLiveUserspace(filesystemRoot, {
-    ...(variant ? { variant } : {}),
-    ...(workspace ? { workspace } : {}),
+    variant,
+    workspace,
   });
 }
 
 if (!skipBuild) {
   const common: NeruRuntimeBuildOptions = {
-    ...(output ? { output } : {}),
-    ...(variant ? { variant } : {}),
-    ...(workspace ? { workspace } : {}),
+    output,
+    variant,
+    workspace,
     rebuildLinux: args.includes("--rebuild-linux"),
   };
 
@@ -84,14 +85,10 @@ if (!skipBuild) {
 const filesystemToken = option("--fs-token");
 const filesystemClientId = option("--fs-client-id");
 const bootOptions = {
-  ...(artifactRoot ? { artifactRoot } : {}),
-  ...(pocImage && artifactRoot
-    ? { initramfs: artifactPaths(artifactRoot).initramfs }
-    : {}),
-  ...(filesystemRoot ? { filesystemRoot } : {}),
-  ...(filesystemEndpoint ? { filesystemEndpoint } : {}),
-  ...(filesystemToken ? { filesystemToken } : {}),
-  ...(filesystemClientId ? { filesystemClientId } : {}),
+  ...defaultBootOptions(),
+  artifactRoot,
+  initramfs: pocImage && artifactRoot ? artifactPaths(artifactRoot).initramfs : null,
+  filesystemRoot, filesystemEndpoint, filesystemToken, filesystemClientId,
 };
 
 if (args.includes("--probe")) {

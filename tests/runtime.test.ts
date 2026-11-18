@@ -1,3 +1,4 @@
+import { defaultBootOptions } from "../src/types.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { access, mkdtemp, writeFile } from "node:fs/promises";
@@ -27,20 +28,20 @@ test("ships the terminal Linux-WASM runtime", async () => {
 
 test("boots the kernel alone against the selected live root", async () => {
   const paths = await fixture();
-  const plan = planNeruBoot({
+  const plan = planNeruBoot({ ...defaultBootOptions(),
     artifactRoot: paths.root,
     linuxRuntime: "/bin/true",
     filesystemRoot: "/tmp/mikuos-root",
   });
   assert.deepEqual(plan.argv, ["--kernel", paths.kernel]);
-  assert.equal(plan.environment.NERU_FS_ROOT, "/tmp/mikuos-root");
-  assert.equal(Object.hasOwn(plan, "initramfs"), false);
+  assert.equal((plan.environment.NERU_FS_ROOT ?? null), "/tmp/mikuos-root");
+  assert.equal(plan.initramfs, null);
 });
 
 test("still supports an explicit proof-of-concept initramfs", async () => {
   const paths = await fixture();
   await writeFile(paths.initramfs, new Uint8Array([1, 2, 3, 4]));
-  const plan = planNeruBoot({
+  const plan = planNeruBoot({ ...defaultBootOptions(),
     artifactRoot: paths.root,
     linuxRuntime: "/bin/true",
     initramfs: paths.initramfs,
@@ -53,15 +54,15 @@ test("still supports an explicit proof-of-concept initramfs", async () => {
 
 test("probes a kernel-only runtime", async () => {
   const paths = await fixture();
-  const result = await probeNeru({ artifactRoot: paths.root, linuxRuntime: "/bin/true" });
+  const result = await probeNeru({ ...defaultBootOptions(), artifactRoot: paths.root, linuxRuntime: "/bin/true" });
   assert.equal(result.kernel, paths.kernel);
-  assert.equal(Object.hasOwn(result, "initramfs"), false);
+  assert.equal(result.initramfs, null);
 });
 
 test("launches through the terminal host", async () => {
   const paths = await fixture();
   assert.equal(
-    await bootNeru({
+    await bootNeru({ ...defaultBootOptions(),
       artifactRoot: paths.root,
       linuxRuntime: "/bin/true",
       filesystemRoot: "/tmp/mikuos-root",

@@ -3,17 +3,21 @@ import { access } from "node:fs/promises";
 import { constants } from "node:fs";
 import { join, resolve } from "node:path";
 import { artifactPaths, neruPackageRoot, neruVariant } from "./runtime.js";
+import { defaultBuildOptions } from "./types.js";
 import type {
   NeruArtifactPaths,
   NeruPocImageBuildOptions,
   NeruRuntimeBuildOptions,
 } from "./types.js";
 
-const cleanEnvironment = (): Record<string, string> => Object.fromEntries(
-  Object.entries(process.env).filter(
-    (entry): entry is [string, string] => typeof entry[1] === "string",
-  ),
-);
+const cleanEnvironment = (): Record<string, string> => {
+  const environment: Record<string, string> = {};
+  for (const key of Object.keys(process.env)) {
+    const value = process.env[key] ?? null;
+    if (value !== null) environment[key] = value;
+  }
+  return environment;
+};
 
 async function runBuilder(
   builder: string,
@@ -53,7 +57,7 @@ async function verifyCommonArtifacts(output: NeruArtifactPaths): Promise<void> {
  */
 export async function prepareNeruLiveUserspace(
   root: string,
-  options: Pick<NeruRuntimeBuildOptions, "variant" | "workspace"> = {},
+  options: Pick<NeruRuntimeBuildOptions, "variant" | "workspace"> = { variant: null, workspace: null },
 ): Promise<void> {
   const packageRoot = neruPackageRoot();
   const variant = neruVariant(options.variant);
@@ -76,7 +80,7 @@ export async function prepareNeruLiveUserspace(
 
 /** Build or reuse the kernel-only NERU runtime. */
 export async function buildNeruRuntime(
-  options: NeruRuntimeBuildOptions = {},
+  options: NeruRuntimeBuildOptions = defaultBuildOptions(),
 ): Promise<NeruArtifactPaths> {
   const packageRoot = neruPackageRoot();
   const variant = neruVariant(options.variant);
