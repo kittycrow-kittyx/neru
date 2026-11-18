@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { runInThisContext } from "node:vm";
 import { Worker as NodeWorker } from "node:worker_threads";
+import type { FilesystemConfig, WorkerBootstrapData, WorkerRequest, WorkerReply } from "../runtime/worker-protocol.mts";
 
 const UPSTREAM_LINUX = fileURLToPath(
   new URL("../vendor/linux-wasm/runtime/linux.js", import.meta.url),
@@ -18,7 +19,7 @@ const WORKER_BOOTSTRAP = new URL(
 );
 
 const args = process.argv.slice(2);
-const value = (name: string): string | undefined => optionValue(args, name);
+const value = (name: string): string | null => optionValue(args, name);
 
 if (args.includes("--help")) {
   process.stdout.write(
@@ -48,44 +49,44 @@ if (!initramfsPath && !filesystemRoot && !filesystemEndpoint) {
   );
 }
 
-const filesystem = initramfsPath
+const filesystem: FilesystemConfig | null = initramfsPath
   ? null
   : filesystemRoot
     ? {
         kind: "directory",
         root: filesystemRoot,
-        clientId: process.env.NERU_FS_CLIENT_ID,
+        clientId: process.env.NERU_FS_CLIENT_ID ?? null,
       }
     : {
         kind: "authority",
-        endpoint: filesystemEndpoint,
-        token: process.env.NERU_FS_TOKEN,
-        clientId: process.env.NERU_FS_CLIENT_ID,
+        endpoint: filesystemEndpoint ?? null,
+        token: process.env.NERU_FS_TOKEN ?? null,
+        clientId: process.env.NERU_FS_CLIENT_ID ?? null,
       };
 
 const workers = new Set<NodeWorker>();
 
-type MessageHandler = (event: { data: unknown }) => void;
-type ErrorHandler = (error: unknown) => void;
+type MessageHandler = (event: { data: WorkerReply }) => void;
+type ErrorHandler = (error: Error) => void;
 
 class WorkerAdapter {
   #worker: NodeWorker;
-  #onmessage: MessageHandler | null | undefined;
-  #onmessageerror: ErrorHandler | null | undefined;
-  #onerror: ErrorHandler | null | undefined;
+  #onmessage: MessageHandler | null = null;
+  #onmessageerror: ErrorHandler | null = null;
+  #onerror: ErrorHandler | null = null;
 
   constructor(_url: string | URL, options: { name?: string } = {}) {
     this.#worker = new NodeWorker(WORKER_BOOTSTRAP, {
-      ...(options.name === undefined ? {} : { name: options.name }),
+      ...(options.name == null ? {} : { name: options.name }),
       workerData: {
         upstreamWorker: UPSTREAM_WORKER,
         filesystem,
-      },
+      } satisfies WorkerBootstrapData,
     });
 
     workers.add(this.#worker);
     this.#worker.once("exit", () => workers.delete(this.#worker));
-    this.#worker.on("message", (data) => this.#onmessage?.({ data }));
+    this.#worker.on("message", (data: WorkerReply) => this.#onmessage?.({ data }));
     this.#worker.on("messageerror", (error) => this.#onmessageerror?.(error));
     this.#worker.on("error", (error) => {
       if (shuttingDown) return;
@@ -97,7 +98,7 @@ class WorkerAdapter {
   set onmessage(handler: MessageHandler | null) { this.#onmessage = handler; }
   set onmessageerror(handler: ErrorHandler | null) { this.#onmessageerror = handler; }
   set onerror(handler: ErrorHandler | null) { this.#onerror = handler; }
-  postMessage(message: unknown) { this.#worker.postMessage(message); }
+  postMessage(message: WorkerRequest) { this.#worker.postMessage(message); }
   terminate() {
     workers.delete(this.#worker);
     return this.#worker.terminate();
@@ -171,7 +172,7 @@ const flushUnmarkedConsole = (): void => {
   pendingConsole = pendingConsole.slice(visibleEnd);
 };
 
-const writeGuestConsole = (message: unknown): void => {
+const writeGuestConsole = (message: string): void => {
   if (shuttingDown) return;
 
   pendingConsole += String(message);
@@ -225,7 +226,7 @@ runInThisContext(
   `${upstreamSource}\n;globalThis.__neruLinux = linux;`,
   { filename: UPSTREAM_LINUX },
 );
-const globals = globalThis as typeof globalThis & { __neruLinux?: unknown };
+const globals = globalThis as typeof globalThis & { __neruLinux?: LinuxLauncher };
 const linuxValue = globals.__neruLinux;
 delete globals.__neruLinux;
 if (typeof linuxValue !== "function") {
@@ -234,10 +235,10 @@ if (typeof linuxValue !== "function") {
 
 type LinuxLauncher = (
   worker: string, variant: "wasm32_nommu" | "wasm64_nommu", kernel: WebAssembly.Module,
-  commandLine: string, initramfs: ArrayBuffer, diagnostic: (message: unknown) => void,
-  consoleOutput: (message: unknown) => void,
+  commandLine: string, initramfs: ArrayBuffer, diagnostic: (message: string) => void,
+  consoleOutput: (message: string) => void,
 ) => Promise<{ key_input(value: string): void }>;
-const linux = linuxValue as LinuxLauncher;
+const linux = linuxValue;
 const kernelBytes = Uint8Array.from(await readFile(kernelPath));
 const initramfs = initramfsPath
   ? Uint8Array.from(await readFile(initramfsPath)).buffer
@@ -260,7 +261,7 @@ const machine = await linux(
   kernel,
   commandLine,
   initramfs,
-  (message: unknown) => {
+  (message: string) => {
     if (verbose) process.stderr.write(`neru: ${message}\n`);
   },
   writeGuestConsole,

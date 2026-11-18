@@ -5,10 +5,11 @@ import { readFile } from "node:fs/promises";
 import { runInThisContext } from "node:vm";
 import { parentPort, workerData } from "node:worker_threads";
 import { createNodeMikuosFs } from "./node-mikuosfs.mts";
+import type { WorkerBootstrapData, WorkerRequest, WorkerReply } from "./worker-protocol.mts";
 
 const port = parentPort;
 if (!port) throw new Error("NERU Linux worker has no parent port");
-const data: unknown = workerData;
+const data: WorkerBootstrapData = workerData;
 if (typeof data !== "object" || data === null || !("upstreamWorker" in data) || typeof data.upstreamWorker !== "string" || !data.upstreamWorker) {
   throw new Error("NERU Linux worker was not given the pinned upstream worker path");
 }
@@ -38,14 +39,14 @@ Object.defineProperty(globalThis, "__neruFsSync", {
   value: filesystem,
 });
 
-type MessageHandler = (event: { data: unknown }) => void;
-type ErrorHandler = (error: unknown) => void;
+type MessageHandler = (event: { data: WorkerRequest }) => void;
+type ErrorHandler = (error: Error) => void;
 let onmessage: MessageHandler | null = null;
 let onmessageerror: ErrorHandler | null = null;
-const pending: unknown[] = [];
+const pending: WorkerRequest[] = [];
 
 const selfShim = {
-  postMessage(message: unknown) {
+  postMessage(message: WorkerReply) {
     port.postMessage(message);
   },
 };
@@ -55,7 +56,8 @@ Object.defineProperty(selfShim, "onmessage", {
   set: (handler: MessageHandler | null) => {
     onmessage = handler;
     while (onmessage && pending.length) {
-      onmessage({ data: pending.shift() });
+      const data = pending.shift();
+      if (data) onmessage({ data });
     }
   },
 });
@@ -72,7 +74,7 @@ Object.defineProperty(globalThis, "self", {
   value: selfShim,
 });
 
-port.on("message", (data) => {
+port.on("message", (data: WorkerRequest) => {
   if (onmessage) onmessage({ data });
   else pending.push(data);
 });

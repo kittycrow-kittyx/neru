@@ -11,7 +11,7 @@ import type {
 
 const cleanEnvironment = (): Record<string, string> => Object.fromEntries(
   Object.entries(process.env).filter(
-    (entry): entry is [string, string] => entry[1] !== undefined,
+    (entry): entry is [string, string] => typeof entry[1] === "string",
   ),
 );
 

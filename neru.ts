@@ -10,7 +10,7 @@ import {
 
 const args = process.argv.slice(2);
 
-const option = (name: string): string | undefined => optionValue(args, name);
+const option = (name: string): string | null => optionValue(args, name);
 
 if (args.includes("--help") || args.includes("-h")) {
   process.stdout.write(
@@ -30,10 +30,8 @@ if (args.includes("--help") || args.includes("-h")) {
   process.exit(0);
 }
 
-const variant = option("--variant") as
-  | "wasm32_nommu"
-  | "wasm64_nommu"
-  | undefined;
+const variant = option("--variant");
+if (variant !== null && variant !== "wasm32_nommu" && variant !== "wasm64_nommu") throw new Error(`Unsupported Linux-WASM variant: ${variant}`);
 
 const userland = option("--userland") ?? process.env.NERU_USERLAND;
 const output =

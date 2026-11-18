@@ -57,7 +57,7 @@ const cleanEnvironment = (
 ): Record<string, string> => {
   const environment: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined) environment[key] = value;
+    if (typeof value === "string") environment[key] = value;
   }
   return { ...environment, ...additions };
 };
@@ -66,7 +66,7 @@ export function planNeruBoot(options: NeruBootOptions = {}): NeruBootPlan {
   const artefacts = artifactPaths(options.artifactRoot);
   const executable = resolveLinuxRuntime(options.linuxRuntime);
   const kernel = resolve(options.kernel ?? artefacts.kernel);
-  const initramfs = options.initramfs ? resolve(options.initramfs) : undefined;
+  const initramfs = options.initramfs ? resolve(options.initramfs) : null;
   const bridgeEnvironment: Record<string, string> = {};
   if (options.filesystemRoot) bridgeEnvironment.NERU_FS_ROOT = resolve(options.filesystemRoot);
   if (options.filesystemEndpoint) bridgeEnvironment.NERU_FS_ENDPOINT = options.filesystemEndpoint;

@@ -34,7 +34,7 @@ test("boots the kernel alone against the selected live root", async () => {
   });
   assert.deepEqual(plan.argv, ["--kernel", paths.kernel]);
   assert.equal(plan.environment.NERU_FS_ROOT, "/tmp/mikuos-root");
-  assert.equal(plan.initramfs, undefined);
+  assert.equal(Object.hasOwn(plan, "initramfs"), false);
 });
 
 test("still supports an explicit proof-of-concept initramfs", async () => {
@@ -55,7 +55,7 @@ test("probes a kernel-only runtime", async () => {
   const paths = await fixture();
   const result = await probeNeru({ artifactRoot: paths.root, linuxRuntime: "/bin/true" });
   assert.equal(result.kernel, paths.kernel);
-  assert.equal(result.initramfs, undefined);
+  assert.equal(Object.hasOwn(result, "initramfs"), false);
 });
 
 test("launches through the terminal host", async () => {

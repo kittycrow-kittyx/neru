@@ -80,14 +80,14 @@ const absolute = (value: string | URL, base: URL): URL =>
 export function planNeruBrowserBoot(
   options: NeruBrowserBootOptions = {},
 ): NeruBrowserBootPlan {
-  const documentBase = typeof document === "undefined"
+  const documentBase = !globalThis.document
     ? new URL("http://localhost/")
     : new URL(document.baseURI);
   const base = absolute(options.base ?? "./neru/", documentBase);
   const variant = options.variant ?? "wasm32_nommu";
   const initramfsUrl = options.initramfsUrl
     ? absolute(options.initramfsUrl, base)
-    : undefined;
+    : null;
   return {
     runtimeUrl: absolute(options.runtimeUrl ?? "linux.js", base),
     workerUrl: absolute(options.workerUrl ?? "linux-worker.js", base),
@@ -112,12 +112,12 @@ export async function loadNeruLinuxBrowserRuntime(
   const response = await fetcher(runtimeUrl, { cache: "no-store" });
   if (!response.ok) throw new Error(`${runtimeUrl.pathname}: HTTP ${response.status}`);
   const source = await response.text();
-  const factory = new Function(`${source}\nreturn linux;`) as () => unknown;
+  const factory = new Function(`${source}\nreturn linux;`) as () => NeruLinuxBrowserRuntime;
   const runtime = factory();
   if (typeof runtime !== "function") {
     throw new Error("Pinned Linux-WASM browser runtime did not expose linux()");
   }
-  return runtime as NeruLinuxBrowserRuntime;
+  return runtime;
 }
 
 function requireBrowserCapabilities(options: NeruBrowserBootOptions): void {

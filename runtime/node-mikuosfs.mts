@@ -25,8 +25,8 @@ const decoder = new TextDecoder("utf-8");
 
 type GuestWord = number | bigint;
 
-const errorCode = (error: unknown): number => {
-  const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+const errorCode = (error: Error): number => {
+  const code = "code" in error ? error.code : null;
   return typeof code === "string" && Object.hasOwn(ERRNO, code)
     ? ERRNO[code as keyof typeof ERRNO] : ERRNO.EIO;
 };
@@ -98,7 +98,7 @@ export function createNodeMikuosFs(rootValue: string) {
   };
 
   const read = (memory: WebAssembly.Memory, pathPointer: GuestWord, offsetValue: GuestWord, bufferPointer: GuestWord, countValue: GuestWord): number => {
-    let descriptor: number | undefined;
+    let descriptor: number | null = null;
     try {
       const path = finalPath(cstring(memory, pathPointer));
       const offset = Number(offsetValue);
@@ -110,9 +110,9 @@ export function createNodeMikuosFs(rootValue: string) {
       const target = new Uint8Array(memory.buffer, Number(bufferPointer), count);
       return readSync(descriptor, target, 0, count, offset);
     } catch (error) {
-      return errorCode(error);
+      return error instanceof Error ? errorCode(error) : ERRNO.EIO;
     } finally {
-      if (descriptor !== undefined) closeSync(descriptor);
+      if (descriptor !== null) closeSync(descriptor);
     }
   };
 
@@ -125,7 +125,7 @@ export function createNodeMikuosFs(rootValue: string) {
         .sort();
       if (!Number.isSafeInteger(index) || index < 0) return ERRNO.EIO;
       const entry = entries[index];
-      if (entry === undefined) return 0;
+      if (entry == null) return 0;
       return writeBytes(
         memory,
         bufferPointer,
@@ -133,7 +133,7 @@ export function createNodeMikuosFs(rootValue: string) {
         encoder.encode(entry),
       );
     } catch (error) {
-      return errorCode(error);
+      return error instanceof Error ? errorCode(error) : ERRNO.EIO;
     }
   };
 
@@ -142,7 +142,7 @@ export function createNodeMikuosFs(rootValue: string) {
       try {
         return Number(lstatSync(lstatPath(cstring(memory, pathPointer))).mode);
       } catch (error) {
-        return errorCode(error);
+        return error instanceof Error ? errorCode(error) : ERRNO.EIO;
       }
     },
 
@@ -150,7 +150,7 @@ export function createNodeMikuosFs(rootValue: string) {
       try {
         return BigInt(lstatSync(lstatPath(cstring(memory, pathPointer))).size);
       } catch (error) {
-        return BigInt(errorCode(error));
+        return BigInt(error instanceof Error ? errorCode(error) : ERRNO.EIO);
       }
     },
 
@@ -167,7 +167,7 @@ export function createNodeMikuosFs(rootValue: string) {
           encoder.encode(guestLink(readlinkSync(path, "utf8"))),
         );
       } catch (error) {
-        return errorCode(error);
+        return error instanceof Error ? errorCode(error) : ERRNO.EIO;
       }
     },
   });
