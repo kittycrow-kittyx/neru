@@ -19,3 +19,7 @@ export type * from "./protocol.js";
 export type { SharedFsClient, FetchSharedFsOptions } from "./client.js";
 export type { SharedFsDaemon, SharedFsDaemonOptions } from "./daemon.js";
 export type { NeruFsBridgeOptions, NeruFsBridgeRequest, NeruFsBridgeResponse } from "./bridge.js";
+
+export { defaultFetchOptions } from "./client.js";
+export { bridgeOptions } from "./bridge.js";
+export type { GenerationMetadata } from "./protocol.js";

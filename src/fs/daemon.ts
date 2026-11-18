@@ -1,5 +1,6 @@
+import { ensureDirectory } from "./node-path.js";
 import { parseJson, readSnapshot } from "./wire.js";
-import { mkdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { AuthoritativeFilesystem } from "./core.js";
 import { NodeJournalPersistence } from "./node-persistence.js";
@@ -28,7 +29,7 @@ const readSeed = async (seed: SharedSnapshot | string | null): Promise<SharedSna
 
 export const startSharedFsDaemon = async (options: SharedFsDaemonOptions): Promise<SharedFsDaemon> => {
   const store = resolve(options.store);
-  await mkdir(store, { recursive: true });
+  await ensureDirectory(store);
   const filesystem = await AuthoritativeFilesystem.open(new NodeJournalPersistence(store));
   const seed = await readSeed(options.seed ?? null);
   if (seed) await filesystem.seed(seed);

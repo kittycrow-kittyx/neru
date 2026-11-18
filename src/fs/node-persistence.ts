@@ -1,19 +1,15 @@
-import { arrayField, field, numberField, parseJson, readManifestInode, record, stringField } from "./wire.js";
+import { ensureDirectory } from "./node-path.js";
+import { arrayField, field, numberField, parseJson, readManifestInode, record, stringField, wireValue } from "./wire.js";
 import type { JsonValue } from "./wire.js";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { SHARED_FS_SCHEMA } from "./protocol.js";
-import type { ManifestInode } from "./protocol.js";
+import type { ManifestInode, GenerationMetadata } from "./protocol.js";
 import { cloneState } from "./core.js";
 import type { CommitIntent, SharedPersistence, StoredInode, StoredState } from "./core.js";
 
-interface StateManifest {
-  schema: typeof SHARED_FS_SCHEMA;
-  filesystemId: string;
-  generation: number;
-  imageGeneration: number;
-  committedAt: string;
+interface StateManifest extends GenerationMetadata {
   nextInode: number;
   paths: Array<[string, string]>;
   inodes: ManifestInode[];
@@ -23,11 +19,11 @@ interface StateManifest {
 export type CommitStage = "after-intent" | "after-blobs" | "after-manifest" | "after-current" | "after-complete";
 
 export interface NodePersistenceOptions {
-  crashAt?: CommitStage;
-  onStage?: (stage: CommitStage) => void | Promise<void>;
+  crashAt: CommitStage | null;
+  onStage: ((stage: CommitStage) => void | Promise<void>) | null;
 }
 
-const json = (value: StateManifest | (CommitIntent & { schema: 1 }) | { schema: 1; generation: number; checksum?: string; transactionId?: string; completedAt?: string }): string => `${JSON.stringify(value, null, 2)}\n`;
+const json = (value: StateManifest | (CommitIntent & { schema: 1 }) | { schema: 1; generation: number } | { schema: 1; generation: number; checksum: string } | { schema: 1; generation: number; transactionId: string; completedAt: string }): string => `${JSON.stringify(wireValue(parseJson(JSON.stringify(value))), null, 2)}\n`;
 const sha256 = (value: Uint8Array | string): string => createHash("sha256").update(value).digest("hex");
 const manifestName = (generation: number): string => `${String(generation).padStart(20, "0")}.json`;
 
@@ -42,15 +38,16 @@ const fsyncDirectory = async (path: string): Promise<void> => {
     try { await handle.sync(); } finally { await handle.close(); }
   } catch (error) {
     // Filesystems may reject directory sync even when file sync and atomic rename work.
-    const code = error instanceof Error && "code" in error ? error.code : null;
+    const code = error instanceof Error ? ((error as NodeJS.ErrnoException).code ?? null) : null;
     if (code === "EINVAL" || code === "ENOTSUP" || code === "EOPNOTSUPP" || code === "EISDIR" || code === "EBADF") return;
     if (process.platform === "win32" && (code === "EPERM" || code === "EACCES")) return;
-    throw error;
+    if (error instanceof Error) throw error;
+    throw new Error(typeof error === "string" ? error : "non-Error filesystem failure");
   }
 };
 
 const writeAtomic = async (path: string, value: string | Uint8Array): Promise<void> => {
-  await mkdir(dirname(path), { recursive: true });
+  await ensureDirectory(dirname(path));
   const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
   await writeFile(temporary, value);
   await fsyncFile(temporary);
@@ -60,14 +57,15 @@ const writeAtomic = async (path: string, value: string | Uint8Array): Promise<vo
 
 const exists = async (path: string): Promise<boolean> => {
   try { await stat(path); return true; } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
-    throw error;
+    if (error instanceof Error && ((error as NodeJS.ErrnoException).code ?? null) === "ENOENT") return false;
+    if (error instanceof Error) throw error;
+    throw new Error(typeof error === "string" ? error : "non-Error filesystem failure");
   }
 };
 
 function pathPair(value: JsonValue): [string, string] {
   if (!Array.isArray(value)) throw new Error("invalid manifest path pair");
-  const [path, inode] = value;
+  const path = value[0] ?? null, inode = value[1] ?? null;
   if (value.length !== 2 || typeof path !== "string" || typeof inode !== "string") throw new Error("invalid manifest path pair");
   return [path, inode];
 }
@@ -86,7 +84,7 @@ export class NodeJournalPersistence implements SharedPersistence {
   readonly journal: string;
   readonly current: string;
 
-  constructor(readonly root: string, private readonly options: NodePersistenceOptions = {}) {
+  constructor(readonly root: string, private readonly options: NodePersistenceOptions = { crashAt: null, onStage: null }) {
     this.generations = join(root, "generations");
     this.blobs = join(root, "blobs");
     this.journal = join(root, "journal");
@@ -136,10 +134,10 @@ export class NodeJournalPersistence implements SharedPersistence {
 
   private async prepare(): Promise<void> {
     await Promise.all([
-      mkdir(this.root, { recursive: true }),
-      mkdir(this.generations, { recursive: true }),
-      mkdir(this.blobs, { recursive: true }),
-      mkdir(this.journal, { recursive: true }),
+      ensureDirectory(this.root),
+      ensureDirectory(this.generations),
+      ensureDirectory(this.blobs),
+      ensureDirectory(this.journal),
     ]);
     for (const directory of [this.root, this.generations, this.blobs, this.journal]) {
       for (const name of await readdir(directory)) {
@@ -149,7 +147,7 @@ export class NodeJournalPersistence implements SharedPersistence {
   }
 
   private async stage(stage: CommitStage): Promise<void> {
-    await this.options.onStage?.(stage);
+    if (this.options.onStage) await this.options.onStage(stage);
     if (this.options.crashAt === stage) throw new Error(`simulated crash at ${stage}`);
   }
 
@@ -178,8 +176,8 @@ export class NodeJournalPersistence implements SharedPersistence {
         ctimeMs: inode.ctimeMs,
         version: inode.version,
         nlink: inode.nlink,
-        ...(blob ? { blob } : {}),
-        ...(inode.kind === "symlink" ? { target: inode.target ?? "" } : {}),
+        blob,
+        target: inode.kind === "symlink" ? inode.target ?? "" : null,
       });
     }
     const payload = {
@@ -192,17 +190,16 @@ export class NodeJournalPersistence implements SharedPersistence {
       paths: [...state.paths.entries()].sort(([a], [b]) => a.localeCompare(b)),
       inodes,
     };
-    return { ...payload, checksum: sha256(JSON.stringify(payload)) };
+    return { ...payload, checksum: sha256(JSON.stringify(wireValue(parseJson(JSON.stringify(payload))))) };
   }
 
   private async currentGeneration(): Promise<number | null> {
     try {
       const value = record(parseJson(await readFile(this.current, "utf8")));
-      return value.schema === 1 && typeof value.generation === "number" && Number.isSafeInteger(value.generation) && value.generation >= 0
-        ? value.generation
-        : null;
+      const generation = field(value, "generation");
+      return field(value, "schema") === 1 && typeof generation === "number" && Number.isSafeInteger(generation) && generation >= 0 ? generation : null;
     } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+      if (error instanceof Error && ((error as NodeJS.ErrnoException).code ?? null) === "ENOENT") return null;
       return null;
     }
   }
@@ -227,7 +224,9 @@ export class NodeJournalPersistence implements SharedPersistence {
   private async readGeneration(generation: number): Promise<StoredState | null> {
     try {
       const raw = record(parseJson(await readFile(join(this.generations, manifestName(generation)), "utf8")));
-      const { checksum, ...payload } = raw;
+      const checksum = field(raw, "checksum");
+      const payload = { ...raw };
+      delete payload.checksum;
       if (sha256(JSON.stringify(payload)) !== checksum) return null;
       const manifest = decodeManifest(raw);
       if (manifest.generation !== generation) return null;
@@ -245,8 +244,8 @@ export class NodeJournalPersistence implements SharedPersistence {
           ctimeMs: inode.ctimeMs,
           version: inode.version,
           nlink: inode.nlink,
-          ...(data ? { data } : {}),
-          ...(inode.kind === "symlink" ? { target: inode.target ?? "" } : {}),
+          data,
+          target: inode.kind === "symlink" ? inode.target ?? "" : null,
         });
       }
       const state: StoredState = {

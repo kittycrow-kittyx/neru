@@ -6,3 +6,5 @@
 - `NodeCheckpointStore.publish()` builds and verifies a temporary directory before replacing the CHECKPOINT marker.
 
 An unsuccessful publication preserves the previous marker.
+
+Callbacks use explicit null when not supplied.

@@ -6,3 +6,5 @@
 - `load()` validates the selected manifest and its blobs; `commit()` publishes the next generation.
 
 This implementation uses file sync and atomic rename for publication.
+
+The crash-stage and callback settings are nullable. Manifest encoding preserves the original omission and checksum rules.

@@ -23,3 +23,5 @@
 - [runtime](modules/runtime.md)
 - [types](modules/types.md)
 - [fs/wire](modules/fs/wire.md)
+
+- [Directory creation](modules/fs/node-path.md)

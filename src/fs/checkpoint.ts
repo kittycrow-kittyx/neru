@@ -1,3 +1,4 @@
+import { ensureDirectory } from "./node-path.js";
 import { field, numberField, parseJson, record, stringField } from "./wire.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
@@ -12,13 +13,13 @@ export interface CheckpointReference {
 }
 
 export interface CheckpointHooks {
-  afterBuild?: () => void | Promise<void>;
-  afterVerify?: () => void | Promise<void>;
-  beforePublish?: () => void | Promise<void>;
+  afterBuild: (() => void | Promise<void>) | null;
+  afterVerify: (() => void | Promise<void>) | null;
+  beforePublish: (() => void | Promise<void>) | null;
 }
 
 const atomicText = async (path: string, text: string): Promise<void> => {
-  await mkdir(dirname(path), { recursive: true });
+  await ensureDirectory(dirname(path));
   const temporary = `${path}.tmp-${randomUUID()}`;
   await writeFile(temporary, text);
   await rename(temporary, path);
@@ -48,17 +49,17 @@ export class NodeCheckpointStore {
     generation: number,
     build: (directory: string) => Promise<{ checksum: string }>,
     verify: (directory: string, checksum: string) => Promise<void>,
-    hooks: CheckpointHooks = {},
+    hooks: CheckpointHooks = { afterBuild: null, afterVerify: null, beforePublish: null },
   ): Promise<CheckpointReference> {
-    await mkdir(this.checkpoints, { recursive: true });
+    await ensureDirectory(this.checkpoints);
     const temporary = join(this.checkpoints, `.building-${generation}-${randomUUID()}`);
     const final = join(this.checkpoints, `${String(generation).padStart(20, "0")}-${randomUUID()}`);
     await mkdir(temporary, { recursive: false });
     try {
       const built = await build(temporary);
-      await hooks.afterBuild?.();
+      if (hooks.afterBuild) await hooks.afterBuild();
       await verify(temporary, built.checksum);
-      await hooks.afterVerify?.();
+      if (hooks.afterVerify) await hooks.afterVerify();
       await rename(temporary, final);
       const reference: CheckpointReference = {
         schema: 1,
@@ -67,12 +68,13 @@ export class NodeCheckpointStore {
         checksum: built.checksum,
         createdAt: new Date().toISOString(),
       };
-      await hooks.beforePublish?.();
+      if (hooks.beforePublish) await hooks.beforePublish();
       await atomicText(this.current, `${JSON.stringify(reference, null, 2)}\n`);
       return reference;
     } catch (error) {
       await rm(temporary, { recursive: true, force: true });
-      throw error;
+      if (error instanceof Error) throw error;
+      throw new Error(typeof error === "string" ? error : "checkpoint publication failed");
     }
   }
 }

@@ -12,3 +12,5 @@ Import the public authority interfaces from this module. Implementations reside 
 - [Server](server.md): `SharedFsHttpServer`.
 - [Protocol](protocol.md): `SHARED_FS_SCHEMA`, `SharedFsError`, `decodeBytes`, `encodeBytes`, `isKernelLocalPath`, `isPersistentPath`, `normaliseSharedPath`.
 - Protocol types: `SharedKind`, `InodeMetadata`, `SharedEntry`, `StoredInode`, `ManifestInode`, `SharedSnapshot`, `SharedOperation`, `SharedTransaction`, `SharedCommitResult`, `LeaseRequest`, `Lease`, `LockRequest`, `AdvisoryLock`, `ConflictDetail`, `PERSISTENT_ROOTS`, `KERNEL_LOCAL_ROOTS`.
+
+Additional contracts and defaults: `GenerationMetadata`, `defaultFetchOptions`, `bridgeOptions`.
