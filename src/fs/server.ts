@@ -29,7 +29,7 @@ const send = (response: ServerResponse, status: number, value: SharedSnapshot | 
 const body = async (request: IncomingMessage, limit: number): Promise<JsonValue> => {
   const chunks: Buffer[] = [];
   let size = 0;
-  for await (const chunk of request as AsyncIterable<Buffer | string>) {
+  for await (const chunk of request as AsyncIterable<Buffer | string, void, void>) {
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += bytes.length;
     if (size > limit) throw new SharedFsError("EINVAL", "request body is too large");
@@ -59,7 +59,7 @@ export class SharedFsHttpServer {
         if (!this.server) return;
         const active = this.server;
         this.server = null;
-        await new Promise<void>((resolve, reject) => active.close(error => error ? reject(error) : resolve()));
+        await new Promise<void>((resolve, reject) => active.close((error: Error | null = null) => error ? reject(error) : resolve()));
       },
     };
   }

@@ -12,7 +12,7 @@ import {
 } from "./protocol.js";
 import type {
   AdvisoryLock,
-  GenerationMetadata,
+  StoredState,
   Lease,
   LeaseRequest,
   LockRequest,
@@ -25,13 +25,8 @@ import type {
   StoredInode,
 } from "./protocol.js";
 
-export type { StoredInode } from "./protocol.js";
+export type { StoredInode, StoredState } from "./protocol.js";
 
-export interface StoredState extends GenerationMetadata {
-  nextInode: number;
-  paths: Map<string, string>;
-  inodes: Map<string, StoredInode>;
-}
 
 export interface CommitIntent {
   transactionId: string;

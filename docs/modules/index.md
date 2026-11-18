@@ -21,3 +21,5 @@
 Default input factories: `defaultBootOptions`, `defaultBuildOptions` and `defaultBrowserBootOptions`.
 
 Filesystem defaults and shared identity: `defaultFetchOptions`, `bridgeOptions`, `GenerationMetadata`.
+
+The filesystem core also exports `StoredState`, `StoredInode`, `CommitIntent`, `SharedPersistence` and `cloneState`; persistence exports `CommitStage`, `NodePersistenceOptions`; checkpoints export `CheckpointReference`, `CheckpointHooks`; boot policy exports `MissingSharedPolicy`, `SharedBootDecision`; HTTP server exports `SharedFsServerOptions`.

@@ -183,3 +183,16 @@ export const isPersistentPath = (value: string): boolean => {
   const path = normaliseSharedPath(value);
   return !isKernelLocalPath(path) && path !== "/tmp" && !path.startsWith("/tmp/");
 };
+
+export interface StoredState extends GenerationMetadata {
+  nextInode: number;
+  paths: Map<string, string>;
+  inodes: Map<string, StoredInode>;
+}
+
+export interface StateManifest extends GenerationMetadata {
+  nextInode: number;
+  paths: Array<[string, string]>;
+  inodes: ManifestInode[];
+  checksum: string;
+}

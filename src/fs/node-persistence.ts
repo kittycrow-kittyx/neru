@@ -5,16 +5,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { SHARED_FS_SCHEMA } from "./protocol.js";
-import type { ManifestInode, GenerationMetadata } from "./protocol.js";
+import type { ManifestInode, StateManifest } from "./protocol.js";
 import { cloneState } from "./core.js";
 import type { CommitIntent, SharedPersistence, StoredInode, StoredState } from "./core.js";
 
-interface StateManifest extends GenerationMetadata {
-  nextInode: number;
-  paths: Array<[string, string]>;
-  inodes: ManifestInode[];
-  checksum: string;
-}
 
 export type CommitStage = "after-intent" | "after-blobs" | "after-manifest" | "after-current" | "after-complete";
 

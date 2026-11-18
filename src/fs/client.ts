@@ -79,7 +79,7 @@ export class FetchSharedFsClient implements SharedFsClient {
     if (!this.lease) return;
     const lease = this.lease;
     this.lease = null;
-    await this.request(`/v1/leases/${encodeURIComponent(lease.leaseId)}`, () => {}, { method: "DELETE" });
+    await this.request(`/v1/leases/${encodeURIComponent(lease.leaseId)}`, () => {}, { method: "DELETE", body: null });
   }
 
   snapshot(): Promise<SharedSnapshot> {
@@ -117,7 +117,7 @@ export class FetchSharedFsClient implements SharedFsClient {
 
   async releaseLock(lockId: string): Promise<void> {
     const lease = await this.requireLease();
-    await this.request(`/v1/locks/${encodeURIComponent(lockId)}?lease=${encodeURIComponent(lease.leaseId)}`, () => {}, { method: "DELETE" });
+    await this.request(`/v1/locks/${encodeURIComponent(lockId)}?lease=${encodeURIComponent(lease.leaseId)}`, () => {}, { method: "DELETE", body: null });
   }
 
   private async requireLease(): Promise<Lease> {
@@ -130,10 +130,10 @@ export class FetchSharedFsClient implements SharedFsClient {
     return new URL(path.replace(/^\//, ""), root.href.endsWith("/") ? root : new URL(`${root.href}/`));
   }
 
-  private async request<T>(path: string, decode: (value: JsonValue) => T, init: RequestInit = {}): Promise<T> {
-    const headers = new Headers(init.headers ?? {});
+  private async request<T>(path: string, decode: (value: JsonValue) => T, init: { method: "GET" | "POST" | "DELETE"; body: string | null } = { method: "GET", body: null }): Promise<T> {
+    const headers = new Headers();
     headers.set("accept", "application/json");
-    if ((init.body ?? null) !== null) headers.set("content-type", "application/json");
+    if (init.body !== null) headers.set("content-type", "application/json");
     if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
     const response = await this.fetcher(this.url(path), { ...init, headers, cache: "no-store" });
     const text = await response.text();
