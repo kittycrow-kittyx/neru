@@ -97,6 +97,46 @@ export function createNodeMikuosFs(rootValue: string) {
     return guest ? `/${guest}` : "/";
   };
 
+  const read = (memory: WebAssembly.Memory, pathPointer: GuestWord, offsetValue: GuestWord, bufferPointer: GuestWord, countValue: GuestWord): number => {
+    let descriptor: number | undefined;
+    try {
+      const path = finalPath(cstring(memory, pathPointer));
+      const offset = Number(offsetValue);
+      const count = Number(countValue);
+      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(count) || count < 0) {
+        return ERRNO.EIO;
+      }
+      descriptor = openSync(path, "r");
+      const target = new Uint8Array(memory.buffer, Number(bufferPointer), count);
+      return readSync(descriptor, target, 0, count, offset);
+    } catch (error) {
+      return errorCode(error);
+    } finally {
+      if (descriptor !== undefined) closeSync(descriptor);
+    }
+  };
+
+  const readdir = (memory: WebAssembly.Memory, pathPointer: GuestWord, indexValue: GuestWord, bufferPointer: GuestWord, countValue: GuestWord): number => {
+    try {
+      const path = finalPath(cstring(memory, pathPointer));
+      const index = Number(indexValue);
+      const entries = readdirSync(path, { encoding: "utf8" })
+        .filter((name) => name !== ".thistle-meta.json" && name !== ".thistle-meta.json.tmp")
+        .sort();
+      if (!Number.isSafeInteger(index) || index < 0) return ERRNO.EIO;
+      const entry = entries[index];
+      if (entry === undefined) return 0;
+      return writeBytes(
+        memory,
+        bufferPointer,
+        countValue,
+        encoder.encode(entry),
+      );
+    } catch (error) {
+      return errorCode(error);
+    }
+  };
+
   return Object.freeze({
     mode(memory: WebAssembly.Memory, pathPointer: GuestWord) {
       try {
@@ -114,45 +154,8 @@ export function createNodeMikuosFs(rootValue: string) {
       }
     },
 
-    read(memory: WebAssembly.Memory, pathPointer: GuestWord, offsetValue: GuestWord, bufferPointer: GuestWord, countValue: GuestWord) {
-      let descriptor: number | undefined;
-      try {
-        const path = finalPath(cstring(memory, pathPointer));
-        const offset = Number(offsetValue);
-        const count = Number(countValue);
-        if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(count) || count < 0) {
-          return ERRNO.EIO;
-        }
-        descriptor = openSync(path, "r");
-        const target = new Uint8Array(memory.buffer, Number(bufferPointer), count);
-        return readSync(descriptor, target, 0, count, offset);
-      } catch (error) {
-        return errorCode(error);
-      } finally {
-        if (descriptor !== undefined) closeSync(descriptor);
-      }
-    },
-
-    readdir(memory: WebAssembly.Memory, pathPointer: GuestWord, indexValue: GuestWord, bufferPointer: GuestWord, countValue: GuestWord) {
-      try {
-        const path = finalPath(cstring(memory, pathPointer));
-        const index = Number(indexValue);
-        const entries = readdirSync(path, { encoding: "utf8" })
-          .filter((name) => name !== ".thistle-meta.json" && name !== ".thistle-meta.json.tmp")
-          .sort();
-        if (!Number.isSafeInteger(index) || index < 0) return ERRNO.EIO;
-        const entry = entries[index];
-        if (entry === undefined) return 0;
-        return writeBytes(
-          memory,
-          bufferPointer,
-          countValue,
-          encoder.encode(entry),
-        );
-      } catch (error) {
-        return errorCode(error);
-      }
-    },
+    read,
+    readdir,
 
     readlink(memory: WebAssembly.Memory, pathPointer: GuestWord, bufferPointer: GuestWord, countValue: GuestWord) {
       try {

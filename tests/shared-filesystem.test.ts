@@ -45,7 +45,8 @@ test("1-2: Teto writes are visible to NERU and NERU writes are visible to Teto",
     { op: "create", path: "/home/guest/shared", kind: "file", mode: 0o644, uid: 1000, gid: 1000, data: encodeBytes(new TextEncoder().encode("teto")) },
   ]);
   assert.equal(text(fs, "/home/guest/shared"), "teto");
-  const entry = fs.snapshot().entries.find(item => item.path === "/home/guest/shared")!;
+  const entry = fs.snapshot().entries.find(item => item.path === "/home/guest/shared");
+  assert.ok(entry, "missing /home/guest/shared");
   await commit(fs, "neru", neru.leaseId, start.generation, [
     { op: "write", path: entry.path, offset: 0, truncate: true, expectedVersion: entry.version, data: encodeBytes(new TextEncoder().encode("neru")) },
   ]);
@@ -59,7 +60,8 @@ test("3 and 5: concurrent independent files succeed and same-file stale writes c
   const base = fs.snapshot().generation;
   await commit(fs, "left", left.leaseId, base, [{ op: "create", path: "/home/guest/left", kind: "file", mode: 0o644, uid: 1000, gid: 1000, data: encodeBytes(new TextEncoder().encode("L")) }]);
   await commit(fs, "right", right.leaseId, base, [{ op: "create", path: "/home/guest/right", kind: "file", mode: 0o644, uid: 1000, gid: 1000, data: encodeBytes(new TextEncoder().encode("R")) }]);
-  const inode = fs.snapshot().entries.find(entry => entry.path === "/home/guest/left")!;
+  const inode = fs.snapshot().entries.find(entry => entry.path === "/home/guest/left");
+  assert.ok(inode, "missing /home/guest/left");
   await commit(fs, "left", left.leaseId, fs.snapshot().generation, [{ op: "write", path: inode.path, offset: 0, truncate: true, expectedVersion: inode.version, data: encodeBytes(new TextEncoder().encode("new")) }]);
   await assert.rejects(
     commit(fs, "right", right.leaseId, base, [{ op: "write", path: inode.path, offset: 0, truncate: true, expectedVersion: inode.version, data: encodeBytes(new TextEncoder().encode("lost")) }]),
@@ -72,7 +74,8 @@ test("4: rename publishes one atomic directory generation", async () => {
   const fs = await setup();
   const client = lease(fs, "rename");
   await commit(fs, "rename", client.leaseId, fs.snapshot().generation, [{ op: "create", path: "/etc/old", kind: "file", mode: 0o644, uid: 0, gid: 0, data: encodeBytes(new TextEncoder().encode("config")) }]);
-  const before = fs.snapshot().entries.find(entry => entry.path === "/etc/old")!;
+  const before = fs.snapshot().entries.find(entry => entry.path === "/etc/old");
+  assert.ok(before, "missing /etc/old");
   const watched = fs.watch(fs.snapshot().generation, 5_000);
   await commit(fs, "rename", client.leaseId, fs.snapshot().generation, [{ op: "rename", from: "/etc/old", to: "/etc/new", expectedVersion: before.version, expectedTargetVersion: null }]);
   const after = await watched;
@@ -131,7 +134,9 @@ test("11: native Linux and THX clients see one mounted persistent namespace", as
     const base = await native.snapshot();
     await native.commit([{ op: "create", path: "/opt/native", kind: "file", mode: 0o644, uid: 0, gid: 0, data: encodeBytes(new TextEncoder().encode("native")) }], base.generation);
     const seen = await thx.snapshot();
-    assert.equal(new TextDecoder().decode(decodeBytes(seen.entries.find(entry => entry.path === "/opt/native")!.data)), "native");
+    const item = seen.entries.find(entry => entry.path === "/opt/native");
+    assert.ok(item, "missing /opt/native");
+    assert.equal(new TextDecoder().decode(decodeBytes(item.data)), "native");
   } finally { await server.close(); }
 });
 
@@ -147,7 +152,9 @@ test("12: separate remote clients coordinate through one durable authority", asy
       const base = await first.snapshot();
       await first.commit([{ op: "create", path: "/var/remote", kind: "file", mode: 0o644, uid: 0, gid: 0, data: encodeBytes(new TextEncoder().encode("durable")) }], base.generation);
       const seen = await second.snapshot();
-      assert.equal(new TextDecoder().decode(decodeBytes(seen.entries.find(entry => entry.path === "/var/remote")!.data)), "durable");
+      const item = seen.entries.find(entry => entry.path === "/var/remote");
+      assert.ok(item, "missing /var/remote");
+      assert.equal(new TextDecoder().decode(decodeBytes(item.data)), "durable");
     } finally { await server.close(); }
     const reopened = await AuthoritativeFilesystem.open(new NodeJournalPersistence(root));
     assert.equal(text(reopened, "/var/remote"), "durable");

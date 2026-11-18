@@ -1,13 +1,9 @@
 #!/usr/bin/env node
+import { optionValue } from "../args.js";
 import { startSharedFsDaemon } from "./daemon.js";
 
 const args = process.argv.slice(2);
-const option = (name: string): string | undefined => {
-  const joined = args.find(value => value.startsWith(`${name}=`));
-  if (joined) return joined.slice(name.length + 1);
-  const index = args.indexOf(name);
-  return index >= 0 ? args[index + 1] : undefined;
-};
+const option = (name: string): string | undefined => optionValue(args, name);
 if (args.includes("--help") || args.includes("-h")) {
   process.stdout.write(
     "Usage: neru-fs --store DIR [--host ADDRESS] [--port NUMBER] [--token TOKEN] [--seed SNAPSHOT.json]\n",

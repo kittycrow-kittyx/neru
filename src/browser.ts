@@ -120,9 +120,7 @@ export async function loadNeruLinuxBrowserRuntime(
   return runtime as NeruLinuxBrowserRuntime;
 }
 
-export async function bootNeruBrowser(
-  options: NeruBrowserBootOptions = {},
-): Promise<NeruBrowserMachine> {
+function requireBrowserCapabilities(options: NeruBrowserBootOptions): void {
   const isolated = options.crossOriginIsolated ?? globalThis.crossOriginIsolated;
   if (isolated !== true) {
     throw new Error(
@@ -133,37 +131,40 @@ export async function bootNeruBrowser(
     throw new Error("NERU web requires SharedArrayBuffer support");
   }
 
-  installArrayBufferTransfer();
-  const plan = planNeruBrowserBoot(options);
+}
+
+async function fetchArtifact(url: URL, fetcher: typeof fetch): Promise<ArrayBuffer> {
+  const response = await fetcher(url, { cache: "no-store" });
+  if (!response.ok) throw new Error(`${url.pathname}: HTTP ${response.status}`);
+  return response.arrayBuffer();
+}
+
+function setFilesystemConfig(plan: NeruBrowserBootPlan): void {
   if (!plan.initramfsUrl && !plan.filesystemEndpoint) {
     throw new Error("Kernel-only NERU web boot requires a live filesystem endpoint");
   }
   Object.defineProperty(globalThis, "__neruFilesystemConfig", {
     configurable: true,
     value: plan.filesystemEndpoint
-      ? {
-          kind: "authority",
-          endpoint: plan.filesystemEndpoint,
-          token: plan.filesystemToken,
-          clientId: plan.filesystemClientId,
-        }
+      ? { kind: "authority", endpoint: plan.filesystemEndpoint, token: plan.filesystemToken, clientId: plan.filesystemClientId }
       : null,
   });
+}
+
+export async function bootNeruBrowser(
+  options: NeruBrowserBootOptions = {},
+): Promise<NeruBrowserMachine> {
+  requireBrowserCapabilities(options);
+  installArrayBufferTransfer();
+  const plan = planNeruBrowserBoot(options);
+  setFilesystemConfig(plan);
 
   const fetcher = options.fetcher ?? fetch;
   const runtimePromise = options.runtime ?? loadNeruLinuxBrowserRuntime(plan.runtimeUrl, fetcher);
-  const kernelResponse = await fetcher(plan.kernelUrl, { cache: "no-store" });
-  if (!kernelResponse.ok) throw new Error(`${plan.kernelUrl.pathname}: HTTP ${kernelResponse.status}`);
-  const initramfs = plan.initramfsUrl
-    ? await fetcher(plan.initramfsUrl, { cache: "no-store" }).then(async response => {
-        if (!response.ok) throw new Error(`${plan.initramfsUrl!.pathname}: HTTP ${response.status}`);
-        return await response.arrayBuffer();
-      })
-    : new ArrayBuffer(0);
-
-  const kernel = await (options.compileKernel ?? WebAssembly.compile)(
-    await kernelResponse.arrayBuffer(),
-  );
+  // The initramfs remains optional for the live-root boot path. Only verified HTTP responses reach the compiler.
+  const kernelBytes = await fetchArtifact(plan.kernelUrl, fetcher);
+  const initramfs = plan.initramfsUrl ? await fetchArtifact(plan.initramfsUrl, fetcher) : new ArrayBuffer(0);
+  const kernel = await (options.compileKernel ?? WebAssembly.compile)(kernelBytes);
   const machine = await (await runtimePromise)(
     plan.workerUrl.href,
     plan.variant,

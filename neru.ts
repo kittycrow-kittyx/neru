@@ -1,3 +1,4 @@
+import { optionValue } from "./src/args.js";
 import {
   artifactPaths,
   buildNeruImage,
@@ -9,13 +10,7 @@ import {
 
 const args = process.argv.slice(2);
 
-const option = (name: string): string | undefined => {
-  const joined = args.find(argument => argument.startsWith(`${name}=`));
-  if (joined) return joined.slice(name.length + 1);
-
-  const index = args.indexOf(name);
-  return index >= 0 ? args[index + 1] : undefined;
-};
+const option = (name: string): string | undefined => optionValue(args, name);
 
 if (args.includes("--help") || args.includes("-h")) {
   process.stdout.write(
@@ -54,6 +49,13 @@ const pocImage = args.includes("--poc-image");
 
 let artifactRoot = output;
 
+if (!skipBuild && !pocImage && filesystemRoot) {
+  await prepareNeruLiveUserspace(filesystemRoot, {
+    ...(variant ? { variant } : {}),
+    ...(workspace ? { workspace } : {}),
+  });
+}
+
 if (!skipBuild) {
   const common = {
     ...(output ? { output } : {}),
@@ -61,13 +63,6 @@ if (!skipBuild) {
     ...(workspace ? { workspace } : {}),
     rebuildLinux: args.includes("--rebuild-linux"),
   };
-
-  if (!pocImage && filesystemRoot) {
-    await prepareNeruLiveUserspace(filesystemRoot, {
-      ...(variant ? { variant } : {}),
-      ...(workspace ? { workspace } : {}),
-    });
-  }
 
   const artefacts = pocImage
     ? await buildNeruImage({
@@ -87,6 +82,8 @@ if (!skipBuild) {
   );
 }
 
+const filesystemToken = option("--fs-token");
+const filesystemClientId = option("--fs-client-id");
 const bootOptions = {
   ...(artifactRoot ? { artifactRoot } : {}),
   ...(pocImage && artifactRoot
@@ -94,12 +91,8 @@ const bootOptions = {
     : {}),
   ...(filesystemRoot ? { filesystemRoot } : {}),
   ...(filesystemEndpoint ? { filesystemEndpoint } : {}),
-  ...(option("--fs-token")
-    ? { filesystemToken: option("--fs-token")! }
-    : {}),
-  ...(option("--fs-client-id")
-    ? { filesystemClientId: option("--fs-client-id")! }
-    : {}),
+  ...(filesystemToken ? { filesystemToken } : {}),
+  ...(filesystemClientId ? { filesystemClientId } : {}),
 };
 
 if (args.includes("--probe")) {
@@ -111,6 +104,7 @@ if (args.includes("--probe")) {
       ? `Proof-of-concept initramfs: ${result.initramfs}\n`
       : "Initramfs: none\n",
   );
-} else if (args.includes("--boot")) {
+}
+if (!args.includes("--probe") && args.includes("--boot")) {
   process.exitCode = await bootNeru(bootOptions);
 }

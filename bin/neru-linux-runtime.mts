@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+import { optionValue } from "../src/args.js";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { runInThisContext } from "node:vm";
@@ -17,12 +18,7 @@ const WORKER_BOOTSTRAP = new URL(
 );
 
 const args = process.argv.slice(2);
-const value = (name: string): string | undefined => {
-  const joined = args.find((argument) => argument.startsWith(`${name}=`));
-  if (joined) return joined.slice(name.length + 1);
-  const index = args.indexOf(name);
-  return index >= 0 ? args[index + 1] : undefined;
-};
+const value = (name: string): string | undefined => optionValue(args, name);
 
 if (args.includes("--help")) {
   process.stdout.write(
@@ -167,6 +163,14 @@ const stopLinux = async (requestedStatus: number): Promise<void> => {
   process.exit(status);
 };
 
+const flushUnmarkedConsole = (): void => {
+  // Retain a partial marker so a shutdown sequence split across worker messages is still recognised.
+  const retained = longestShutdownPrefixSuffix(pendingConsole);
+  const visibleEnd = pendingConsole.length - retained;
+  if (visibleEnd > 0) process.stdout.write(pendingConsole.slice(0, visibleEnd));
+  pendingConsole = pendingConsole.slice(visibleEnd);
+};
+
 const writeGuestConsole = (message: unknown): void => {
   if (shuttingDown) return;
 
@@ -176,14 +180,7 @@ const writeGuestConsole = (message: unknown): void => {
     const markerStart = pendingConsole.indexOf(SHUTDOWN_PREFIX);
 
     if (markerStart < 0) {
-      const retained = longestShutdownPrefixSuffix(pendingConsole);
-      const visibleEnd = pendingConsole.length - retained;
-
-      if (visibleEnd > 0) {
-        process.stdout.write(pendingConsole.slice(0, visibleEnd));
-      }
-
-      pendingConsole = pendingConsole.slice(visibleEnd);
+      flushUnmarkedConsole();
       return;
     }
 
