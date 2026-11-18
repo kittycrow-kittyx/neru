@@ -22,3 +22,4 @@
 - [index](modules/index.md)
 - [runtime](modules/runtime.md)
 - [types](modules/types.md)
+- [fs/wire](modules/fs/wire.md)

@@ -1,7 +1,9 @@
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { SharedFsError } from "./protocol.js";
-import type { LockRequest, SharedSnapshot, SharedTransaction } from "./protocol.js";
+import type { AdvisoryLock, ConflictDetail, Lease, SharedCommitResult, SharedSnapshot } from "./protocol.js";
+import { parseJson, readHeartbeat, readLeaseRequest, readLockRequest, readSnapshot, readTransaction } from "./wire.js";
+import type { JsonValue } from "./wire.js";
 import type { AuthoritativeFilesystem } from "./core.js";
 
 export interface SharedFsServerOptions {
@@ -11,8 +13,8 @@ export interface SharedFsServerOptions {
   maxBodyBytes?: number;
 }
 
-const send = (response: ServerResponse, status: number, value: unknown): void => {
-  const body = value === undefined ? "" : `${JSON.stringify(value)}\n`;
+const send = (response: ServerResponse, status: number, value: SharedSnapshot | Lease | AdvisoryLock | SharedCommitResult | { ok: boolean; generation?: number } | { code: string; message: string; detail?: ConflictDetail } | null): void => {
+  const body = status === 204 ? "" : `${JSON.stringify(value)}\n`;
   response.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "content-length": Buffer.byteLength(body),
@@ -24,7 +26,7 @@ const send = (response: ServerResponse, status: number, value: unknown): void =>
   response.end(body);
 };
 
-const body = async (request: IncomingMessage, limit: number): Promise<unknown> => {
+const body = async (request: IncomingMessage, limit: number): Promise<JsonValue> => {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
@@ -33,7 +35,7 @@ const body = async (request: IncomingMessage, limit: number): Promise<unknown> =
     if (size > limit) throw new SharedFsError("EINVAL", "request body is too large");
     chunks.push(bytes);
   }
-  return size ? JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown : {};
+  return size ? parseJson(Buffer.concat(chunks).toString("utf8")) : {};
 };
 
 export class SharedFsHttpServer {
@@ -64,7 +66,7 @@ export class SharedFsHttpServer {
 
   private async route(request: IncomingMessage, response: ServerResponse): Promise<void> {
     try {
-      if (request.method === "OPTIONS") { send(response, 204, undefined); return; }
+      if (request.method === "OPTIONS") { send(response, 204, null); return; }
       if (this.options.token && request.headers.authorization !== `Bearer ${this.options.token}`) {
         send(response, 401, { code: "EINVAL", message: "unauthorised" });
         return;
@@ -79,7 +81,7 @@ export class SharedFsHttpServer {
         send(response, error.code === "ESTALE" || error.code === "ELOCKED" ? 409 : 400, {
           code: error.code,
           message: error.message,
-          detail: error.detail,
+          ...(error.detail ? { detail: error.detail } : {}),
         });
       } else {
         send(response, 500, { code: "EINVAL", message: error instanceof Error ? error.message : String(error) });
@@ -99,13 +101,13 @@ export class SharedFsHttpServer {
         send(response, 200, await this.filesystem.watch(after, timeout)); return true;
       }
       case "POST /v1/seed":
-        send(response, 200, await this.filesystem.seed(await body(request, limit) as SharedSnapshot)); return true;
+        send(response, 200, await this.filesystem.seed(readSnapshot(await body(request, limit)))); return true;
       case "POST /v1/leases":
-        send(response, 201, this.filesystem.createLease(await body(request, limit) as { clientId: string; ttlMs?: number })); return true;
+        send(response, 201, this.filesystem.createLease(readLeaseRequest(await body(request, limit)))); return true;
       case "POST /v1/transactions":
-        send(response, 200, await this.filesystem.commit(await body(request, limit) as SharedTransaction)); return true;
+        send(response, 200, await this.filesystem.commit(readTransaction(await body(request, limit)))); return true;
       case "POST /v1/locks":
-        send(response, 201, this.filesystem.acquireLock(await body(request, limit) as LockRequest)); return true;
+        send(response, 201, this.filesystem.acquireLock(readLockRequest(await body(request, limit)))); return true;
       default: return false;
     }
   }
@@ -113,7 +115,7 @@ export class SharedFsHttpServer {
   private async routeDynamic(request: IncomingMessage, response: ServerResponse, url: URL, limit: number): Promise<boolean> {
     const heartbeat = /^\/v1\/leases\/([^/]+)\/heartbeat$/.exec(url.pathname)?.[1];
     if (request.method === "POST" && heartbeat) {
-      const value = await body(request, limit) as { ttlMs?: number };
+      const value = readHeartbeat(await body(request, limit));
       send(response, 200, this.filesystem.heartbeat(decodeURIComponent(heartbeat), value.ttlMs));
       return true;
     }

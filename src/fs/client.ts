@@ -1,4 +1,6 @@
-import { SHARED_FS_SCHEMA, SharedFsError } from "./protocol.js";
+import { parseJson, readCommit, readHttpError, readLease, readLock, readSnapshot } from "./wire.js";
+import type { JsonValue } from "./wire.js";
+import { SHARED_FS_SCHEMA } from "./protocol.js";
 import type {
   AdvisoryLock,
   Lease,
@@ -51,7 +53,7 @@ export class FetchSharedFsClient implements SharedFsClient {
 
   async connect(): Promise<Lease> {
     if (this.lease && this.lease.expiresAt > Date.now() + 1_000) return { ...this.lease };
-    this.lease = await this.request<Lease>("/v1/leases", {
+    this.lease = await this.request("/v1/leases", readLease, {
       method: "POST",
       body: JSON.stringify({ clientId: this.clientId, ttlMs: this.options.leaseTtlMs }),
     });
@@ -60,7 +62,7 @@ export class FetchSharedFsClient implements SharedFsClient {
 
   async heartbeat(): Promise<Lease> {
     const lease = await this.requireLease();
-    this.lease = await this.request<Lease>(`/v1/leases/${encodeURIComponent(lease.leaseId)}/heartbeat`, {
+    this.lease = await this.request(`/v1/leases/${encodeURIComponent(lease.leaseId)}/heartbeat`, readLease, {
       method: "POST",
       body: JSON.stringify({ ttlMs: this.options.leaseTtlMs }),
     });
@@ -71,11 +73,11 @@ export class FetchSharedFsClient implements SharedFsClient {
     if (!this.lease) return;
     const lease = this.lease;
     this.lease = null;
-    await this.request<void>(`/v1/leases/${encodeURIComponent(lease.leaseId)}`, { method: "DELETE" });
+    await this.request(`/v1/leases/${encodeURIComponent(lease.leaseId)}`, () => {}, { method: "DELETE" });
   }
 
   snapshot(): Promise<SharedSnapshot> {
-    return this.request<SharedSnapshot>("/v1/snapshot");
+    return this.request("/v1/snapshot", readSnapshot);
   }
 
   async commit(operations: SharedOperation[], baseGeneration: number, imageGeneration?: number): Promise<SharedCommitResult> {
@@ -86,22 +88,22 @@ export class FetchSharedFsClient implements SharedFsClient {
       clientId: this.clientId,
       leaseId: lease.leaseId,
       baseGeneration,
-      ...(imageGeneration !== undefined ? { imageGeneration } : {}),
+      ...(imageGeneration != null ? { imageGeneration } : {}),
       operations,
     };
-    return this.request<SharedCommitResult>("/v1/transactions", {
+    return this.request("/v1/transactions", readCommit, {
       method: "POST",
       body: JSON.stringify(transaction),
     });
   }
 
   watch(after: number, timeoutMs = 30_000): Promise<SharedSnapshot | null> {
-    return this.request<SharedSnapshot | null>(`/v1/watch?after=${after}&timeout=${timeoutMs}`);
+    return this.request(`/v1/watch?after=${after}&timeout=${timeoutMs}`, value => value === null ? null : readSnapshot(value));
   }
 
   async acquireLock(request: Omit<LockRequest, "leaseId">): Promise<AdvisoryLock> {
     const lease = await this.requireLease();
-    return this.request<AdvisoryLock>("/v1/locks", {
+    return this.request("/v1/locks", readLock, {
       method: "POST",
       body: JSON.stringify({ ...request, leaseId: lease.leaseId }),
     });
@@ -109,7 +111,7 @@ export class FetchSharedFsClient implements SharedFsClient {
 
   async releaseLock(lockId: string): Promise<void> {
     const lease = await this.requireLease();
-    await this.request<void>(`/v1/locks/${encodeURIComponent(lockId)}?lease=${encodeURIComponent(lease.leaseId)}`, { method: "DELETE" });
+    await this.request(`/v1/locks/${encodeURIComponent(lockId)}?lease=${encodeURIComponent(lease.leaseId)}`, () => {}, { method: "DELETE" });
   }
 
   private async requireLease(): Promise<Lease> {
@@ -122,22 +124,15 @@ export class FetchSharedFsClient implements SharedFsClient {
     return new URL(path.replace(/^\//, ""), root.href.endsWith("/") ? root : new URL(`${root.href}/`));
   }
 
-  private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  private async request<T>(path: string, decode: (value: JsonValue) => T, init: RequestInit = {}): Promise<T> {
     const headers = new Headers(init.headers);
     headers.set("accept", "application/json");
-    if (init.body !== undefined) headers.set("content-type", "application/json");
+    if (init.body != null) headers.set("content-type", "application/json");
     if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
     const response = await this.fetcher(this.url(path), { ...init, headers, cache: "no-store" });
     const text = await response.text();
-    const payload = text ? JSON.parse(text) as unknown : null;
-    if (!response.ok) {
-      const value = payload as { code?: string; message?: string; detail?: unknown } | null;
-      throw new SharedFsError(
-        (value?.code as SharedFsError["code"] | undefined) ?? "EINVAL",
-        value?.message ?? `shared filesystem HTTP ${response.status}`,
-        value?.detail as never,
-      );
-    }
-    return payload as T;
+    const payload = text ? parseJson(text) : null;
+    if (!response.ok) throw readHttpError(payload, response.status);
+    return decode(payload);
   }
 }
