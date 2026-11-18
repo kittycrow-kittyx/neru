@@ -2,24 +2,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { SHARED_FS_SCHEMA } from "./protocol.js";
-import type { SharedKind } from "./protocol.js";
+import type { ManifestInode } from "./protocol.js";
 import { cloneState } from "./core.js";
 import type { CommitIntent, SharedPersistence, StoredInode, StoredState } from "./core.js";
-
-interface ManifestInode {
-  id: string;
-  kind: SharedKind;
-  mode: number;
-  uid: number;
-  gid: number;
-  atimeMs: number;
-  mtimeMs: number;
-  ctimeMs: number;
-  version: number;
-  nlink: number;
-  blob?: string;
-  target?: string;
-}
 
 interface StateManifest {
   schema: typeof SHARED_FS_SCHEMA;
@@ -53,8 +38,12 @@ const fsyncDirectory = async (path: string): Promise<void> => {
   try {
     const handle = await open(path, "r");
     try { await handle.sync(); } finally { await handle.close(); }
-  } catch {
-    // Some hosts do not permit fsync on directories. File-level fsync and atomic rename still apply.
+  } catch (error) {
+    // Filesystems may reject directory sync even when file sync and atomic rename work.
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EINVAL" || code === "ENOTSUP" || code === "EOPNOTSUPP" || code === "EISDIR" || code === "EBADF") return;
+    if (process.platform === "win32" && (code === "EPERM" || code === "EACCES")) return;
+    throw error;
   }
 };
 
@@ -147,16 +136,20 @@ export class NodeJournalPersistence implements SharedPersistence {
     if (this.options.crashAt === stage) throw new Error(`simulated crash at ${stage}`);
   }
 
+  private async persistBlob(inode: StoredInode): Promise<string | undefined> {
+    if (inode.kind !== "file") return undefined;
+    const data = inode.data ?? new Uint8Array();
+    const blob = sha256(data);
+    const path = join(this.blobs, blob);
+    if (!(await exists(path))) await writeAtomic(path, data);
+    return blob;
+  }
+
   private async writeBlobsAndManifest(state: StoredState): Promise<StateManifest> {
+    // Content-addressed files are durable before the manifest refers to them; sort entries for reproducible checksums.
     const inodes: ManifestInode[] = [];
     for (const inode of [...state.inodes.values()].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }))) {
-      let blob: string | undefined;
-      if (inode.kind === "file") {
-        const data = inode.data ?? new Uint8Array();
-        blob = sha256(data);
-        const path = join(this.blobs, blob);
-        if (!(await exists(path))) await writeAtomic(path, data);
-      }
+      const blob = await this.persistBlob(inode);
       inodes.push({
         id: inode.id,
         kind: inode.kind,
@@ -188,8 +181,8 @@ export class NodeJournalPersistence implements SharedPersistence {
   private async currentGeneration(): Promise<number | null> {
     try {
       const value = JSON.parse(await readFile(this.current, "utf8")) as { schema?: number; generation?: number };
-      return value.schema === 1 && Number.isSafeInteger(value.generation) && (value.generation ?? -1) >= 0
-        ? value.generation!
+      return value.schema === 1 && typeof value.generation === "number" && Number.isSafeInteger(value.generation) && value.generation >= 0
+        ? value.generation
         : null;
     } catch (error) {
       if ((error as { code?: string }).code === "ENOENT") return null;
@@ -206,6 +199,14 @@ export class NodeJournalPersistence implements SharedPersistence {
     return null;
   }
 
+  private async readBlob(inode: ManifestInode): Promise<Uint8Array | undefined> {
+    if (inode.kind !== "file") return undefined;
+    if (!inode.blob) throw new Error("file inode has no content hash");
+    const data = Uint8Array.from(await readFile(join(this.blobs, inode.blob)));
+    if (sha256(data) !== inode.blob) throw new Error("file inode checksum does not match");
+    return data;
+  }
+
   private async readGeneration(generation: number): Promise<StoredState | null> {
     try {
       const manifest = JSON.parse(
@@ -216,12 +217,7 @@ export class NodeJournalPersistence implements SharedPersistence {
       if (sha256(JSON.stringify(payload)) !== checksum) return null;
       const inodes = new Map<string, StoredInode>();
       for (const inode of manifest.inodes) {
-        let data: Uint8Array | undefined;
-        if (inode.kind === "file") {
-          if (!inode.blob) return null;
-          data = Uint8Array.from(await readFile(join(this.blobs, inode.blob)));
-          if (sha256(data) !== inode.blob) return null;
-        }
+        const data = await this.readBlob(inode);
         inodes.set(inode.id, {
           id: inode.id,
           kind: inode.kind,

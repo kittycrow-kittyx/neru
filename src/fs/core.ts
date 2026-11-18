@@ -19,22 +19,10 @@ import type {
   SharedOperation,
   SharedSnapshot,
   SharedTransaction,
+  StoredInode,
 } from "./protocol.js";
 
-export interface StoredInode {
-  id: string;
-  kind: SharedKind;
-  mode: number;
-  uid: number;
-  gid: number;
-  atimeMs: number;
-  mtimeMs: number;
-  ctimeMs: number;
-  version: number;
-  nlink: number;
-  data?: Uint8Array;
-  target?: string;
-}
+export type { StoredInode } from "./protocol.js";
 
 export interface StoredState {
   schema: typeof SHARED_FS_SCHEMA;
@@ -147,6 +135,7 @@ export class MemoryPersistence implements SharedPersistence {
 }
 
 const entryFor = (state: StoredState, path: string): SharedEntry => {
+  // The wire entry includes encoded data only for regular files; links retain their target rather than file bytes.
   const inodeId = state.paths.get(path);
   if (!inodeId) throw new SharedFsError("ENOENT", path);
   const inode = state.inodes.get(inodeId);
@@ -169,9 +158,8 @@ const entryFor = (state: StoredState, path: string): SharedEntry => {
     base.size = data.length;
     base.checksum = dataChecksum(data);
     base.data = encodeBytes(data);
-  } else if (inode.kind === "symlink") {
-    base.target = inode.target ?? "";
   }
+  if (inode.kind === "symlink") base.target = inode.target ?? "";
   return base;
 };
 
@@ -478,7 +466,9 @@ export class AuthoritativeFilesystem {
     this.touch(this.inodeAt(state, parentPath(path)), true);
   }
 
-  private allocate(state: StoredState, kind: SharedKind, mode: number, uid: number, gid: number, data?: Uint8Array, target?: string): StoredInode {
+  private allocate(state: StoredState, operation: Extract<SharedOperation, { op: "create" }>): StoredInode {
+    const { kind, mode, uid, gid, target } = operation;
+    const data = decodeBytes(operation.data);
     const timestamp = this.clock();
     const inode: StoredInode = {
       id: String(state.nextInode++),
@@ -510,6 +500,7 @@ export class AuthoritativeFilesystem {
   }
 
   private apply(state: StoredState, operation: SharedOperation): void {
+    // Apply each operation to the transaction's private state; validate paths and versions before mutation, so rejected transactions cannot publish partial changes.
     switch (operation.op) {
       case "create": {
         const path = this.requireShared(operation.path);
@@ -517,7 +508,7 @@ export class AuthoritativeFilesystem {
         if (state.paths.has(path)) throw new SharedFsError("EEXIST", path);
         this.requireParent(state, path);
         if (operation.kind === "symlink" && operation.target === undefined) throw new SharedFsError("EINVAL", `${path}: symlink target missing`);
-        const inode = this.allocate(state, operation.kind, operation.mode, operation.uid, operation.gid, decodeBytes(operation.data), operation.target);
+        const inode = this.allocate(state, operation);
         state.paths.set(path, inode.id);
         this.touchParent(state, path);
         return;
@@ -622,16 +613,12 @@ export class AuthoritativeFilesystem {
         const targetId = state.paths.get(to);
         const target = targetId ? state.inodes.get(targetId) : undefined;
         const expectedTarget = operation.expectedTargetVersion;
-        if (expectedTarget !== undefined) {
-          const actual = target?.version ?? null;
-          if (actual !== expectedTarget) throw new SharedFsError("ESTALE", `${to}: target generation conflict`, { path: to, expected: expectedTarget, actual, reason: "rename target changed" });
-        }
-        if (target) {
-          if (target.kind === "directory" && [...state.paths.keys()].some(path => path.startsWith(`${to}/`))) throw new SharedFsError("ENOTEMPTY", to);
-          if (source.kind === "directory" && target.kind !== "directory") throw new SharedFsError("ENOTDIR", to);
-          if (source.kind !== "directory" && target.kind === "directory") throw new SharedFsError("EISDIR", to);
-          this.removePath(state, to);
-        }
+        const actual = target?.version ?? null;
+        if (expectedTarget !== undefined && actual !== expectedTarget) throw new SharedFsError("ESTALE", `${to}: target generation conflict`, { path: to, expected: expectedTarget, actual, reason: "rename target changed" });
+        if (target?.kind === "directory" && [...state.paths.keys()].some(path => path.startsWith(`${to}/`))) throw new SharedFsError("ENOTEMPTY", to);
+        if (target && source.kind === "directory" && target.kind !== "directory") throw new SharedFsError("ENOTDIR", to);
+        if (source.kind !== "directory" && target?.kind === "directory") throw new SharedFsError("EISDIR", to);
+        if (target) this.removePath(state, to);
         const moving = [...state.paths.entries()]
           .filter(([path]) => path === from || path.startsWith(`${from}/`))
           .sort(([a], [b]) => a.length - b.length);

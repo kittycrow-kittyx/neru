@@ -4,9 +4,7 @@ export const KERNEL_LOCAL_ROOTS = ["/dev", "/proc", "/sys", "/run"] as const;
 
 export type SharedKind = "file" | "directory" | "symlink";
 
-export interface SharedEntry {
-  path: string;
-  inode: string;
+export interface InodeMetadata {
   kind: SharedKind;
   mode: number;
   uid: number;
@@ -16,9 +14,26 @@ export interface SharedEntry {
   ctimeMs: number;
   version: number;
   nlink: number;
+}
+
+export interface SharedEntry extends InodeMetadata {
+  path: string;
+  inode: string;
   size?: number;
   checksum?: string;
   data?: string;
+  target?: string;
+}
+
+export interface StoredInode extends InodeMetadata {
+  id: string;
+  data?: Uint8Array;
+  target?: string;
+}
+
+export interface ManifestInode extends InodeMetadata {
+  id: string;
+  blob?: string;
   target?: string;
 }
 
@@ -134,7 +149,9 @@ export const decodeBytes = (value: string | undefined): Uint8Array => {
     const chars = clean.slice(index, index + 4);
     const numbers = [...chars].map(char => char === "=" ? 0 : alphabet.indexOf(char));
     if (numbers.some(number => number < 0)) throw new SharedFsError("EINVAL", "invalid base64 payload");
-    const packed = (numbers[0]! << 18) | (numbers[1]! << 12) | (numbers[2]! << 6) | numbers[3]!;
+    const [a, b, c, d] = numbers;
+    if (a === undefined || b === undefined || c === undefined || d === undefined) throw new SharedFsError("EINVAL", "incomplete base64 quartet");
+    const packed = (a << 18) | (b << 12) | (c << 6) | d;
     output.push((packed >>> 16) & 255);
     if (chars[2] !== "=") output.push((packed >>> 8) & 255);
     if (chars[3] !== "=") output.push(packed & 255);

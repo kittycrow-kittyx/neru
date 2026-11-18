@@ -71,36 +71,9 @@ export class SharedFsHttpServer {
       }
       const url = new URL(request.url ?? "/", "http://shared.invalid");
       const limit = this.options.maxBodyBytes ?? 64 * 1024 * 1024;
-      if (request.method === "GET" && url.pathname === "/v1/health") {
-        send(response, 200, { ok: true, generation: this.filesystem.snapshot().generation });
-      } else if (request.method === "GET" && url.pathname === "/v1/snapshot") {
-        send(response, 200, this.filesystem.snapshot());
-      } else if (request.method === "GET" && url.pathname === "/v1/watch") {
-        const after = Number(url.searchParams.get("after") ?? 0);
-        const timeout = Number(url.searchParams.get("timeout") ?? 30_000);
-        send(response, 200, await this.filesystem.watch(after, timeout));
-      } else if (request.method === "POST" && url.pathname === "/v1/seed") {
-        send(response, 200, await this.filesystem.seed(await body(request, limit) as SharedSnapshot));
-      } else if (request.method === "POST" && url.pathname === "/v1/leases") {
-        send(response, 201, this.filesystem.createLease(await body(request, limit) as { clientId: string; ttlMs?: number }));
-      } else if (request.method === "POST" && /^\/v1\/leases\/[^/]+\/heartbeat$/.test(url.pathname)) {
-        const leaseId = decodeURIComponent(url.pathname.split("/")[3]!);
-        const value = await body(request, limit) as { ttlMs?: number };
-        send(response, 200, this.filesystem.heartbeat(leaseId, value.ttlMs));
-      } else if (request.method === "DELETE" && /^\/v1\/leases\/[^/]+$/.test(url.pathname)) {
-        this.filesystem.releaseLease(decodeURIComponent(url.pathname.split("/")[3]!));
-        send(response, 200, { ok: true });
-      } else if (request.method === "POST" && url.pathname === "/v1/transactions") {
-        send(response, 200, await this.filesystem.commit(await body(request, limit) as SharedTransaction));
-      } else if (request.method === "POST" && url.pathname === "/v1/locks") {
-        send(response, 201, this.filesystem.acquireLock(await body(request, limit) as LockRequest));
-      } else if (request.method === "DELETE" && /^\/v1\/locks\/[^/]+$/.test(url.pathname)) {
-        const lockId = decodeURIComponent(url.pathname.split("/")[3]!);
-        this.filesystem.releaseLock(lockId, url.searchParams.get("lease") ?? "");
-        send(response, 200, { ok: true });
-      } else {
-        send(response, 404, { code: "ENOENT", message: "not found" });
-      }
+      if (await this.routeStatic(request, response, url, limit)) return;
+      if (await this.routeDynamic(request, response, url, limit)) return;
+      send(response, 404, { code: "ENOENT", message: "not found" });
     } catch (error) {
       if (error instanceof SharedFsError) {
         send(response, error.code === "ESTALE" || error.code === "ELOCKED" ? 409 : 400, {
@@ -112,5 +85,50 @@ export class SharedFsHttpServer {
         send(response, 500, { code: "EINVAL", message: error instanceof Error ? error.message : String(error) });
       }
     }
+  }
+
+  private async routeStatic(request: IncomingMessage, response: ServerResponse, url: URL, limit: number): Promise<boolean> {
+    switch (`${request.method} ${url.pathname}`) {
+      case "GET /v1/health":
+        send(response, 200, { ok: true, generation: this.filesystem.snapshot().generation }); return true;
+      case "GET /v1/snapshot":
+        send(response, 200, this.filesystem.snapshot()); return true;
+      case "GET /v1/watch": {
+        const after = Number(url.searchParams.get("after") ?? 0);
+        const timeout = Number(url.searchParams.get("timeout") ?? 30_000);
+        send(response, 200, await this.filesystem.watch(after, timeout)); return true;
+      }
+      case "POST /v1/seed":
+        send(response, 200, await this.filesystem.seed(await body(request, limit) as SharedSnapshot)); return true;
+      case "POST /v1/leases":
+        send(response, 201, this.filesystem.createLease(await body(request, limit) as { clientId: string; ttlMs?: number })); return true;
+      case "POST /v1/transactions":
+        send(response, 200, await this.filesystem.commit(await body(request, limit) as SharedTransaction)); return true;
+      case "POST /v1/locks":
+        send(response, 201, this.filesystem.acquireLock(await body(request, limit) as LockRequest)); return true;
+      default: return false;
+    }
+  }
+
+  private async routeDynamic(request: IncomingMessage, response: ServerResponse, url: URL, limit: number): Promise<boolean> {
+    const heartbeat = /^\/v1\/leases\/([^/]+)\/heartbeat$/.exec(url.pathname)?.[1];
+    if (request.method === "POST" && heartbeat) {
+      const value = await body(request, limit) as { ttlMs?: number };
+      send(response, 200, this.filesystem.heartbeat(decodeURIComponent(heartbeat), value.ttlMs));
+      return true;
+    }
+    const lease = /^\/v1\/leases\/([^/]+)$/.exec(url.pathname)?.[1];
+    if (request.method === "DELETE" && lease) {
+      this.filesystem.releaseLease(decodeURIComponent(lease));
+      send(response, 200, { ok: true });
+      return true;
+    }
+    const lock = /^\/v1\/locks\/([^/]+)$/.exec(url.pathname)?.[1];
+    if (request.method === "DELETE" && lock) {
+      this.filesystem.releaseLock(decodeURIComponent(lock), url.searchParams.get("lease") ?? "");
+      send(response, 200, { ok: true });
+      return true;
+    }
+    return false;
   }
 }
