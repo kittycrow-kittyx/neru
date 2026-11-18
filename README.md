@@ -18,6 +18,10 @@ npm run build:runtime
 The default output is `dist/neru-runtime-wasm32_nommu/`, containing
 `vmlinux.wasm`, `linux.js`, `linux-worker.js` and `manifest.json`.
 
+Strict Code Guards checks run before the npm build commands. Run `npm run guards`
+for diagnostics covering Neru's TypeScript source, host adapters, tests and
+owned documentation. Upstream submodules are checked in their own repositories.
+
 ## Boot
 
 ```sh
@@ -39,6 +43,8 @@ The separate `--poc-image --userland DIR` mode builds an initramfs for
 regression testing. It is not required by the live-root runtime.
 
 ## Documentation
+
+- [Module reference](docs/index.md)
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Shared filesystem](docs/SHARED_USERSPACE.md)

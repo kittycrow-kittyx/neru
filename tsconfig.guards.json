@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "allowImportingTsExtensions": true
+  },
+  "include": [
+    "neru.ts",
+    "src/**/*.ts",
+    "bin/**/*.mts",
+    "runtime/**/*.mts",
+    "tests/**/*.ts",
+    "tests/**/*.mts"
+  ]
+}
