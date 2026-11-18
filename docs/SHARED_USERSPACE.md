@@ -1,84 +1,43 @@
-# Authoritative shared mikuOS userspace
+# Shared filesystem
 
-mikuOS has exactly one authoritative persistent userspace. Thistle, Teto and
-NERU/Linux are clients of the same filesystem authority.
+A filesystem authority supplies a root tree to clients. The kernel-only
+runtime requires a root; the normal artefact carries neither persistent user
+data nor an initramfs.
 
-NERU boots the Linux kernel without a launch image. Linux mounts the selected
-mikuOS userspace as its root filesystem and executes NEMUNEMU from that root.
+## Linux interface
 
-```text
-                   authoritative mikuOS userspace
-                         Tree authority
-                    /         |          \
-               Thistle       Teto       NERU
-                                           |
-                                  Linux mikuosfs root
-                                           |
-                             /sbin/nemunemu as PID 1
-```
-
-## No duplicate launch filesystem
-
-The normal NERU artefact contains the kernel and host runtime only. It contains
-no initramfs, BusyBox tree, copied `.thistle.base`, embedded NEMUNEMU binary or
-persistent user data.
-
-The live root supplies `/etc`, `/home`, `/opt`, `/root`, `/sbin`, `/usr`, `/var`
-and the rest of the installed mikuOS system. `/dev`, `/proc`, `/sys`, `/run`
-and `/tmp` remain local to the active Linux session.
-
-The expected kernel command line is:
+The default command line includes:
 
 ```text
 root=mikuos rootfstype=mikuosfs rw init=/sbin/nemunemu
 ```
 
-If the authority is unavailable, boot fails clearly. NERU must not silently
-create an empty or divergent writable root.
+The `rw` request describes the intended mount configuration, not the current
+write support. `kernel/mikuosfs.c` exposes metadata, directory enumeration,
+file reads and symbolic links. `runtime/node-mikuosfs.mjs` implements the
+local directory callbacks. The built-in driver is read-only at present.
 
-## Commit model
+The Node launch path accepts a local directory. The CLI and browser can carry
+an authority endpoint, but the complete remote/browser operation bridge and
+guest mutation path are not implemented.
 
-Every persistent change is an operation transaction. A durable commit writes
-intent, content and metadata, then atomically advances `CURRENT` to a new
-monotonically increasing generation. Incomplete generations are ignored on
-recovery. Per-inode versions provide conflict detection without rejecting
-independent writes made from stale global generations.
+## Authority protocol
 
-Supported operations include create, read/snapshot, write, truncate, rename,
-unlink, mkdir/rmdir, chmod, chown, hard link, symlink, fsync and advisory locks.
-Leases expire after client loss and release abandoned locks.
+The TypeScript authority in `src/fs/` models persistent changes as operation
+transactions. Durable commits record intent, content and metadata, and advance
+`CURRENT` to a new generation. Per-inode versions detect conflicting writes;
+incomplete generations are ignored on recovery.
 
-## Linux bridge
+The protocol covers creation, reads, writes, truncation, rename, removal,
+directories, ownership, permissions, links, fsync and advisory locks. Leases
+allow abandoned locks to expire. These are authority operations, not a list
+of implemented Linux filesystem callbacks.
 
-The Linux kernel requires a built-in `mikuosfs` root driver. Its VFS operations
-are forwarded through shared WebAssembly memory to the NERU host worker, which
-uses the selected authority.
+`src/fs/boot-policy.ts` defines failure, read-only checkpoint and recovery
+policies when the authority is missing. The normal policy fails rather than
+creating a separate writable tree.
 
-For local Node/Bun execution the authority must expose the same host root chosen
-by mikuOS `--root`. For the browser it must expose the same OPFS-backed tree
-selected by Thistle and Teto. Remote clients may use the same transaction
-protocol through an authenticated service.
+## Init
 
-HTTP is an authority and coordination protocol. It is not the intended
-per-operation transport between one Linux-WASM instance and its local host
-worker. That path should use shared-memory request and completion rings with
-Atomics.
-
-## NEMUNEMU
-
-NEMUNEMU lives in the ordinary mikuOS userspace at `/sbin/nemunemu`. Thistle and
-Teto may ignore that executable. Linux loads it from the shared root and starts
-it as PID 1.
-
-NEMUNEMU owns THX loading, Thistle execution and ABI translation. NERU owns the
-Linux root mount and host bridge so NEMUNEMU and native Linux-WASM processes see
-the same files.
-
-## Proof-of-concept image
-
-The original implementation packaged `.thistle.base` into an initramfs. That
-proved the Linux-WASM compiler, kernel build, NEMUNEMU packaging and real-kernel
-boot path. It remains available only through `--poc-image` for regression work.
-
-It is not the production persistence architecture and must never be treated as
-a second writable mikuOS installation.
+The supplied root must contain `/sbin/nemunemu` for the default boot command.
+Linux launches it as init. The runtime does not embed that executable.

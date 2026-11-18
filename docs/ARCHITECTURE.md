@@ -1,51 +1,33 @@
 # Architecture
 
-NERU is the ahead-of-time image builder and Linux kernel-integration layer
-for Thistle systems.
+Neru integrates a pinned Linux-WASM kernel with terminal and browser hosts.
+Its normal build produces the kernel, JavaScript runtime, worker and manifest.
 
 ```text
-same mikuOS userland root
+host-supplied root tree
           |
-          | NERU build (Bun/Node/Python/shell)
-          v
-Linux kernel + deterministic initramfs
+     host callbacks
           |
-          v
-NEMUNEMU compatibility layer
+  Linux mikuosfs driver
           |
-          v
-same packaged mikuOS command and THX contracts
+      Linux VFS
+          |
+    init and processes
 ```
 
-## Ownership
+The built-in `mikuosfs` driver forwards metadata, directory enumeration, file
+reads and symbolic-link reads to host callbacks. The Node worker supplies
+these callbacks for a local directory. The root tree contains the init
+executable and its dependencies.
 
-NERU owns:
+`src/fs/` implements the shared-filesystem authority and transaction protocol.
+The remote and browser authority configuration is separate from the local
+synchronous callbacks; the complete guest transport is not implemented.
+See [shared filesystem](SHARED_USERSPACE.md) for the contract.
 
-- the pinned Linux-WASM source and toolchain integration;
-- conversion of a mikuOS userland root into a Linux-bootable packaged copy;
-- installation of NEMUNEMU and BusyBox compatibility support;
-- deterministic initramfs construction;
-- the shared kernel/initramfs artefacts;
-- terminal and browser host adapters.
+The default init path is `/sbin/nemunemu`. Nemunemu supplies THX execution
+and the guest syscall translation in userspace. Linux startup and root
+mounting belong to Neru.
 
-NEMUNEMU owns:
-
-- THX1 and THX2 execution;
-- the Thistle-to-Linux syscall ABI;
-- compatibility for packaged `#!thistle:<command>` contracts;
-- entry into the packaged userland root.
-
-mikuOS owns the userland. It may select NERU, but it does not maintain a
-second NERU-specific shell, filesystem or command implementation.
-
-## Ahead-of-time boundary
-
-`bun neru.ts --userland ROOT` builds the image before Linux starts. The
-runtime receives only `vmlinux.wasm` and `initramfs.cpio.gz`; no live source
-path or host mikuOS callback crosses the boot boundary.
-
-The browser loads the same artefacts generated during the web build. It does
-not compile the userland after page load.
-
-`uname` inside NERU is the real Linux `uname` and reports the actual built
-kernel release.
+The optional `--poc-image` build packages a root and initramfs for regression
+testing. The normal kernel-only runtime uses a live root instead.
