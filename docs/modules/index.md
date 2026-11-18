@@ -19,3 +19,5 @@
 - Protocol types: `SharedKind`, `InodeMetadata`, `SharedEntry`, `StoredInode`, `ManifestInode`, `SharedSnapshot`, `SharedOperation`, `SharedTransaction`, `SharedCommitResult`, `LeaseRequest`, `Lease`, `LockRequest`, `AdvisoryLock`, `ConflictDetail`, `PERSISTENT_ROOTS`, `KERNEL_LOCAL_ROOTS`.
 
 Default input factories: `defaultBootOptions`, `defaultBuildOptions` and `defaultBrowserBootOptions`.
+
+Filesystem defaults and shared identity: `defaultFetchOptions`, `bridgeOptions`, `GenerationMetadata`.

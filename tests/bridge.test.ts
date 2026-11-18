@@ -1,19 +1,19 @@
 import { parseJson, record, field, numberField } from "../src/fs/wire.js";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { NeruFsBridge } from "../src/fs/bridge.js";
+import { NeruFsBridge, bridgeOptions } from "../src/fs/bridge.js";
 import { AuthoritativeFilesystem, MemoryPersistence } from "../src/fs/core.js";
 import { SharedFsHttpServer } from "../src/fs/server.js";
 
 test("NERU bridge exposes the same authority to a Linux mount client", async () => {
-  const filesystem = await AuthoritativeFilesystem.open(new MemoryPersistence(), { filesystemId: "bridge" });
+  const filesystem = await AuthoritativeFilesystem.open(new MemoryPersistence(), { filesystemId: "bridge", clock: null });
   const server = await new SharedFsHttpServer(filesystem).listen();
   try {
-    const bridge = new NeruFsBridge({ endpoint: server.url, clientId: "linux-mount" });
+    const bridge = new NeruFsBridge({ ...bridgeOptions(server.url), clientId: "linux-mount" });
     const connect = record(parseJson(await bridge.json(JSON.stringify({ schema: 1, id: "1", method: "connect" }))));
-    assert.equal(connect.ok, true);
+    assert.equal((connect.ok ?? null), true);
     const snapshot = record(parseJson(await bridge.json(JSON.stringify({ schema: 1, id: "2", method: "snapshot" }))));
-    assert.equal(snapshot.ok, true);
+    assert.equal((snapshot.ok ?? null), true);
     assert.equal(numberField(record(field(snapshot, "value")), "generation"), 0);
   } finally {
     await server.close();
@@ -21,16 +21,16 @@ test("NERU bridge exposes the same authority to a Linux mount client", async () 
 });
 
 test("filesystem bridge rejects malformed transactions and unsupported methods", async () => {
-  const filesystem = await AuthoritativeFilesystem.open(new MemoryPersistence(), { filesystemId: "invalid-wire" });
+  const filesystem = await AuthoritativeFilesystem.open(new MemoryPersistence(), { filesystemId: "invalid-wire", clock: null });
   const server = await new SharedFsHttpServer(filesystem).listen();
   try {
-    const bridge = new NeruFsBridge({ endpoint: server.url });
+    const bridge = new NeruFsBridge(bridgeOptions(server.url));
     const invalid = { schema: 1, id: "bad", method: "commit", baseGeneration: 0, operations: [{ op: "write", path: "/etc/a", offset: "0", data: "" }] };
     const result = record(parseJson(await bridge.json(JSON.stringify(invalid))));
-    assert.equal(result.ok, false);
-    assert.equal(result.id, "bad");
+    assert.equal((result.ok ?? null), false);
+    assert.equal((result.id ?? null), "bad");
     const unsupported = record(parseJson(await bridge.json(JSON.stringify({ schema: 1, id: "unsupported", method: "missing" }))));
-    assert.equal(unsupported.ok, false);
+    assert.equal((unsupported.ok ?? null), false);
     assert.equal(filesystem.snapshot().generation, 0);
   } finally { await server.close(); }
 });
