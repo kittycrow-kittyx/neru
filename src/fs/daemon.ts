@@ -8,10 +8,10 @@ import { SharedFsHttpServer } from "./server.js";
 
 export interface SharedFsDaemonOptions {
   store: string;
-  hostname?: string;
-  port?: number;
-  token?: string;
-  seed?: SharedSnapshot | string;
+  hostname: string | null;
+  port: number | null;
+  token: string | null;
+  seed: SharedSnapshot | string | null;
 }
 
 export interface SharedFsDaemon {
@@ -33,9 +33,10 @@ export const startSharedFsDaemon = async (options: SharedFsDaemonOptions): Promi
   const seed = await readSeed(options.seed ?? null);
   if (seed) await filesystem.seed(seed);
   const server = new SharedFsHttpServer(filesystem, {
-    ...(options.hostname ? { hostname: options.hostname } : {}),
-    ...(options.port != null ? { port: options.port } : {}),
-    ...(options.token ? { token: options.token } : {}),
+    maxBodyBytes: null,
+    hostname: options.hostname,
+    port: options.port,
+    token: options.token,
   });
   const listening = await server.listen();
   return { filesystem, url: listening.url, close: listening.close };

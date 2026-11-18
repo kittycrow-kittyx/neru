@@ -5,3 +5,5 @@
 - `FetchSharedFsClient` implements that contract using HTTP and retains the current lease. The caller supplies the base generation when committing a transaction.
 
 Call `close()` to release the cached lease.
+
+`defaultFetchOptions()` returns null for unset client configuration fields.

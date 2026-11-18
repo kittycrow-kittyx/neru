@@ -2,19 +2,19 @@ import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { SharedFsError } from "./protocol.js";
 import type { AdvisoryLock, ConflictDetail, Lease, SharedCommitResult, SharedSnapshot } from "./protocol.js";
-import { parseJson, readHeartbeat, readLeaseRequest, readLockRequest, readSnapshot, readTransaction } from "./wire.js";
+import { parseJson, readHeartbeat, readLeaseRequest, readLockRequest, readSnapshot, readTransaction, wireValue } from "./wire.js";
 import type { JsonValue } from "./wire.js";
 import type { AuthoritativeFilesystem } from "./core.js";
 
 export interface SharedFsServerOptions {
-  hostname?: string;
-  port?: number;
-  token?: string;
-  maxBodyBytes?: number;
+  hostname: string | null;
+  port: number | null;
+  token: string | null;
+  maxBodyBytes: number | null;
 }
 
-const send = (response: ServerResponse, status: number, value: SharedSnapshot | Lease | AdvisoryLock | SharedCommitResult | { ok: boolean; generation?: number } | { code: string; message: string; detail?: ConflictDetail } | null): void => {
-  const body = status === 204 ? "" : `${JSON.stringify(value)}\n`;
+const send = (response: ServerResponse, status: number, value: SharedSnapshot | Lease | AdvisoryLock | SharedCommitResult | { ok: boolean; generation: number | null } | { code: string; message: string; detail: ConflictDetail | null } | null): void => {
+  const body = status === 204 ? "" : `${JSON.stringify(wireValue(parseJson(JSON.stringify(value))))}\n`;
   response.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "content-length": Buffer.byteLength(body),
@@ -29,7 +29,7 @@ const send = (response: ServerResponse, status: number, value: SharedSnapshot | 
 const body = async (request: IncomingMessage, limit: number): Promise<JsonValue> => {
   const chunks: Buffer[] = [];
   let size = 0;
-  for await (const chunk of request) {
+  for await (const chunk of request as AsyncIterable<Buffer | string>) {
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += bytes.length;
     if (size > limit) throw new SharedFsError("EINVAL", "request body is too large");
@@ -40,11 +40,11 @@ const body = async (request: IncomingMessage, limit: number): Promise<JsonValue>
 
 export class SharedFsHttpServer {
   private server: Server | null = null;
-  constructor(readonly filesystem: AuthoritativeFilesystem, readonly options: SharedFsServerOptions = {}) {}
+  constructor(readonly filesystem: AuthoritativeFilesystem, readonly options: SharedFsServerOptions = { hostname: null, port: null, token: null, maxBodyBytes: null }) {}
 
   async listen(): Promise<{ url: URL; close(): Promise<void> }> {
     if (this.server) throw new Error("shared filesystem server is already running");
-    const server = createServer((request, response) => void this.route(request, response));
+    const server = createServer(async (request, response) => { await this.route(request, response); });
     this.server = server;
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
@@ -66,31 +66,31 @@ export class SharedFsHttpServer {
 
   private async route(request: IncomingMessage, response: ServerResponse): Promise<void> {
     try {
-      if (request.method === "OPTIONS") { send(response, 204, null); return; }
-      if (this.options.token && request.headers.authorization !== `Bearer ${this.options.token}`) {
-        send(response, 401, { code: "EINVAL", message: "unauthorised" });
+      if ((request.method ?? "") === "OPTIONS") { send(response, 204, null); return; }
+      if (this.options.token && (request.headers.authorization ?? null) !== `Bearer ${this.options.token}`) {
+        send(response, 401, { code: "EINVAL", message: "unauthorised", detail: null });
         return;
       }
       const url = new URL(request.url ?? "/", "http://shared.invalid");
       const limit = this.options.maxBodyBytes ?? 64 * 1024 * 1024;
       if (await this.routeStatic(request, response, url, limit)) return;
       if (await this.routeDynamic(request, response, url, limit)) return;
-      send(response, 404, { code: "ENOENT", message: "not found" });
+      send(response, 404, { code: "ENOENT", message: "not found", detail: null });
     } catch (error) {
       if (error instanceof SharedFsError) {
         send(response, error.code === "ESTALE" || error.code === "ELOCKED" ? 409 : 400, {
           code: error.code,
           message: error.message,
-          ...(error.detail ? { detail: error.detail } : {}),
+          detail: error.detail,
         });
       } else {
-        send(response, 500, { code: "EINVAL", message: error instanceof Error ? error.message : String(error) });
+        send(response, 500, { code: "EINVAL", message: error instanceof Error ? error.message : (typeof error === "string" ? error : "non-Error exception"), detail: null });
       }
     }
   }
 
   private async routeStatic(request: IncomingMessage, response: ServerResponse, url: URL, limit: number): Promise<boolean> {
-    switch (`${request.method} ${url.pathname}`) {
+    switch (`${(request.method ?? "")} ${url.pathname}`) {
       case "GET /v1/health":
         send(response, 200, { ok: true, generation: this.filesystem.snapshot().generation }); return true;
       case "GET /v1/snapshot":
@@ -113,22 +113,22 @@ export class SharedFsHttpServer {
   }
 
   private async routeDynamic(request: IncomingMessage, response: ServerResponse, url: URL, limit: number): Promise<boolean> {
-    const heartbeat = /^\/v1\/leases\/([^/]+)\/heartbeat$/.exec(url.pathname)?.[1];
-    if (request.method === "POST" && heartbeat) {
+    const heartbeat = (/^\/v1\/leases\/([^/]+)\/heartbeat$/.exec(url.pathname) ?? [])[1] ?? null;
+    if ((request.method ?? "") === "POST" && heartbeat) {
       const value = readHeartbeat(await body(request, limit));
       send(response, 200, this.filesystem.heartbeat(decodeURIComponent(heartbeat), value.ttlMs));
       return true;
     }
-    const lease = /^\/v1\/leases\/([^/]+)$/.exec(url.pathname)?.[1];
-    if (request.method === "DELETE" && lease) {
+    const lease = (/^\/v1\/leases\/([^/]+)$/.exec(url.pathname) ?? [])[1] ?? null;
+    if ((request.method ?? "") === "DELETE" && lease) {
       this.filesystem.releaseLease(decodeURIComponent(lease));
-      send(response, 200, { ok: true });
+      send(response, 200, { ok: true, generation: null });
       return true;
     }
-    const lock = /^\/v1\/locks\/([^/]+)$/.exec(url.pathname)?.[1];
-    if (request.method === "DELETE" && lock) {
+    const lock = (/^\/v1\/locks\/([^/]+)$/.exec(url.pathname) ?? [])[1] ?? null;
+    if ((request.method ?? "") === "DELETE" && lock) {
       this.filesystem.releaseLock(decodeURIComponent(lock), url.searchParams.get("lease") ?? "");
-      send(response, 200, { ok: true });
+      send(response, 200, { ok: true, generation: null });
       return true;
     }
     return false;

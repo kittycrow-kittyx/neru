@@ -6,3 +6,5 @@
 - `NeruFsBridge` accepts either options or an existing filesystem client. Its `call` method dispatches typed operations; `json` wraps that interface in a JSON exchange.
 
 The bridge exposes authority operations to host consumers.
+
+`bridgeOptions(endpoint)` returns connection defaults for the given endpoint.

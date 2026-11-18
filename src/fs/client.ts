@@ -1,4 +1,4 @@
-import { parseJson, readCommit, readHttpError, readLease, readLock, readSnapshot } from "./wire.js";
+import { parseJson, readCommit, readHttpError, readLease, readLock, readSnapshot, wireValue } from "./wire.js";
 import type { JsonValue } from "./wire.js";
 import { SHARED_FS_SCHEMA } from "./protocol.js";
 import type {
@@ -12,10 +12,10 @@ import type {
 } from "./protocol.js";
 
 const randomId = (): string => {
-  const uuid = globalThis.crypto?.randomUUID?.();
+  const uuid = globalThis.crypto && typeof globalThis.crypto.randomUUID === "function" ? globalThis.crypto.randomUUID() : null;
   if (uuid) return uuid;
   const bytes = new Uint8Array(16);
-  globalThis.crypto?.getRandomValues?.(bytes);
+  if (globalThis.crypto && typeof globalThis.crypto.getRandomValues === "function") globalThis.crypto.getRandomValues(bytes);
   if (!bytes.some(Boolean)) {
     for (let index = 0; index < bytes.length; index++) bytes[index] = Math.floor(Math.random() * 256);
   }
@@ -28,17 +28,23 @@ export interface SharedFsClient {
   heartbeat(): Promise<Lease>;
   close(): Promise<void>;
   snapshot(): Promise<SharedSnapshot>;
-  commit(operations: SharedOperation[], baseGeneration: number, imageGeneration?: number): Promise<SharedCommitResult>;
-  watch(after: number, timeoutMs?: number): Promise<SharedSnapshot | null>;
+  commit(operations: SharedOperation[], baseGeneration: number): Promise<SharedCommitResult>;
+  commit(operations: SharedOperation[], baseGeneration: number, imageGeneration: number | null): Promise<SharedCommitResult>;
+  watch(after: number): Promise<SharedSnapshot | null>;
+  watch(after: number, timeoutMs: number): Promise<SharedSnapshot | null>;
   acquireLock(request: Omit<LockRequest, "leaseId">): Promise<AdvisoryLock>;
   releaseLock(lockId: string): Promise<void>;
 }
 
 export interface FetchSharedFsOptions {
-  clientId?: string;
-  token?: string;
-  fetcher?: typeof fetch;
-  leaseTtlMs?: number;
+  clientId: string | null;
+  token: string | null;
+  fetcher: typeof fetch | null;
+  leaseTtlMs: number | null;
+}
+
+export function defaultFetchOptions(): FetchSharedFsOptions {
+  return { clientId: null, token: null, fetcher: null, leaseTtlMs: null };
 }
 
 export class FetchSharedFsClient implements SharedFsClient {
@@ -46,7 +52,7 @@ export class FetchSharedFsClient implements SharedFsClient {
   private readonly fetcher: typeof fetch;
   private lease: Lease | null = null;
 
-  constructor(readonly base: string | URL, private readonly options: FetchSharedFsOptions = {}) {
+  constructor(readonly base: string | URL, private readonly options: FetchSharedFsOptions = defaultFetchOptions()) {
     this.clientId = options.clientId ?? randomId();
     this.fetcher = options.fetcher ?? fetch;
   }
@@ -55,7 +61,7 @@ export class FetchSharedFsClient implements SharedFsClient {
     if (this.lease && this.lease.expiresAt > Date.now() + 1_000) return { ...this.lease };
     this.lease = await this.request("/v1/leases", readLease, {
       method: "POST",
-      body: JSON.stringify({ clientId: this.clientId, ttlMs: this.options.leaseTtlMs }),
+      body: JSON.stringify(wireValue({ clientId: this.clientId, ttlMs: this.options.leaseTtlMs })),
     });
     return { ...this.lease };
   }
@@ -64,7 +70,7 @@ export class FetchSharedFsClient implements SharedFsClient {
     const lease = await this.requireLease();
     this.lease = await this.request(`/v1/leases/${encodeURIComponent(lease.leaseId)}/heartbeat`, readLease, {
       method: "POST",
-      body: JSON.stringify({ ttlMs: this.options.leaseTtlMs }),
+      body: JSON.stringify(wireValue({ ttlMs: this.options.leaseTtlMs })),
     });
     return { ...this.lease };
   }
@@ -80,7 +86,7 @@ export class FetchSharedFsClient implements SharedFsClient {
     return this.request("/v1/snapshot", readSnapshot);
   }
 
-  async commit(operations: SharedOperation[], baseGeneration: number, imageGeneration?: number): Promise<SharedCommitResult> {
+  async commit(operations: SharedOperation[], baseGeneration: number, imageGeneration: number | null = null): Promise<SharedCommitResult> {
     const lease = await this.requireLease();
     const transaction: SharedTransaction = {
       schema: SHARED_FS_SCHEMA,
@@ -88,12 +94,12 @@ export class FetchSharedFsClient implements SharedFsClient {
       clientId: this.clientId,
       leaseId: lease.leaseId,
       baseGeneration,
-      ...(imageGeneration != null ? { imageGeneration } : {}),
+      imageGeneration,
       operations,
     };
     return this.request("/v1/transactions", readCommit, {
       method: "POST",
-      body: JSON.stringify(transaction),
+      body: JSON.stringify(wireValue(parseJson(JSON.stringify(transaction)))),
     });
   }
 
@@ -105,7 +111,7 @@ export class FetchSharedFsClient implements SharedFsClient {
     const lease = await this.requireLease();
     return this.request("/v1/locks", readLock, {
       method: "POST",
-      body: JSON.stringify({ ...request, leaseId: lease.leaseId }),
+      body: JSON.stringify(wireValue(parseJson(JSON.stringify({ ...request, leaseId: lease.leaseId })))),
     });
   }
 
@@ -125,9 +131,9 @@ export class FetchSharedFsClient implements SharedFsClient {
   }
 
   private async request<T>(path: string, decode: (value: JsonValue) => T, init: RequestInit = {}): Promise<T> {
-    const headers = new Headers(init.headers);
+    const headers = new Headers(init.headers ?? {});
     headers.set("accept", "application/json");
-    if (init.body != null) headers.set("content-type", "application/json");
+    if ((init.body ?? null) !== null) headers.set("content-type", "application/json");
     if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
     const response = await this.fetcher(this.url(path), { ...init, headers, cache: "no-store" });
     const text = await response.text();

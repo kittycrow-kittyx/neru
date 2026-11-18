@@ -240,7 +240,7 @@ function readOperationBody(value: JsonObject): SharedOperation {
     case "rename": return readRename(value);
     case "symlink": return readSymlink(value);
     case "link": return { op, expectedVersion: optionalNumber(value, "expectedVersion"), from: stringField(value, "from"), to: stringField(value, "to") };
-    case "fsync": return { op, expectedVersion: optionalNumber(value, "expectedVersion"), path optionalString(value, "path") };
+    case "fsync": return { op, expectedVersion: optionalNumber(value, "expectedVersion"), path: optionalString(value, "path") };
     default: return readPathOperation(value, op);
   }
 }

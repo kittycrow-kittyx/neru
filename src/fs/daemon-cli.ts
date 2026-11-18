@@ -10,18 +10,18 @@ if (args.includes("--help") || args.includes("-h")) {
   );
   process.exit(0);
 }
-const store = option("--store") ?? process.env.MIKUOS_FS_STORE;
+const store = option("--store") ?? (process.env.MIKUOS_FS_STORE ?? null);
 if (!store) throw new Error("neru-fs requires --store DIR or MIKUOS_FS_STORE");
-const hostname = option("--host") ?? process.env.MIKUOS_FS_HOST;
-const portText = option("--port") ?? process.env.MIKUOS_FS_PORT;
-const token = option("--token") ?? process.env.MIKUOS_FS_TOKEN;
+const hostname = option("--host") ?? (process.env.MIKUOS_FS_HOST ?? null);
+const portText = option("--port") ?? (process.env.MIKUOS_FS_PORT ?? null);
+const token = option("--token") ?? (process.env.MIKUOS_FS_TOKEN ?? null);
 const seed = option("--seed");
 const daemon = await startSharedFsDaemon({
   store,
-  ...(hostname ? { hostname } : {}),
-  ...(portText ? { port: Number(portText) } : {}),
-  ...(token ? { token } : {}),
-  ...(seed ? { seed } : {}),
+  hostname,
+  port: portText ? Number(portText) : null,
+  token,
+  seed,
 });
 process.stdout.write(`${daemon.url.href}\n`);
 let closing = false;
@@ -30,5 +30,5 @@ const close = async (): Promise<void> => {
   closing = true;
   await daemon.close();
 };
-process.once("SIGINT", () => void close().then(() => process.exit(130)));
-process.once("SIGTERM", () => void close().then(() => process.exit(143)));
+process.once("SIGINT", async () => { await close(); process.exit(130); });
+process.once("SIGTERM", async () => { await close(); process.exit(143); });
