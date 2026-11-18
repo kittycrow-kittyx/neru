@@ -32,8 +32,7 @@ bun neru.ts --artifact-root dist/neru-runtime-wasm32_nommu \
 Linux mounts the root using `mikuosfs`. The default init path is
 `/sbin/nemunemu`, which must exist in the supplied filesystem. The current
 Linux driver supports metadata, directory enumeration, file reads and
-symbolic-link reads. Guest write operations and remote/browser filesystem
-transport are incomplete.
+symbolic-link reads. Linux guests have read-only access. See the shared filesystem contract for transport limits.
 
 An authority endpoint can be configured with `--fs-endpoint URL`. See the
 [filesystem contract](docs/SHARED_USERSPACE.md) for the distinction between

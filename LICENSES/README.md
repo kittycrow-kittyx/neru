@@ -10,3 +10,5 @@ The following files retain their existing `GPL-2.0-only` declarations:
 - `runtime/node-worker-bootstrap.mts`
 
 See [GNU General Public License version 2](GPL-2.0-only.txt). This list does not override other file-level notices. The Linux kernel, vendored dependencies and generated or distributed third-party components retain their applicable licences and distribution obligations.
+
+Run the repository tests with `npm test` from the project root. Licence notices apply independently of test results.
