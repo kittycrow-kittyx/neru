@@ -19,51 +19,54 @@ export interface InodeMetadata {
 export interface SharedEntry extends InodeMetadata {
   path: string;
   inode: string;
-  size?: number;
-  checksum?: string;
-  data?: string;
-  target?: string;
+  size: number | null;
+  checksum: string | null;
+  data: string | null;
+  target: string | null;
 }
 
 export interface StoredInode extends InodeMetadata {
   id: string;
-  data?: Uint8Array;
-  target?: string;
+  data: Uint8Array | null;
+  target: string | null;
 }
 
 export interface ManifestInode extends InodeMetadata {
   id: string;
-  blob?: string;
-  target?: string;
+  blob: string | null;
+  target: string | null;
 }
 
-export interface SharedSnapshot {
+export interface GenerationMetadata {
   schema: typeof SHARED_FS_SCHEMA;
   filesystemId: string;
   generation: number;
   imageGeneration: number;
   committedAt: string;
+}
+
+export interface SharedSnapshot extends GenerationMetadata {
   checksum: string;
   entries: SharedEntry[];
 }
 
 interface ExpectedVersion {
-  expectedVersion?: number;
+  expectedVersion: number | null;
 }
 
 export type SharedOperation =
-  | ({ op: "create"; path: string; kind: SharedKind; mode: number; uid: number; gid: number; data?: string; target?: string } & ExpectedVersion)
-  | ({ op: "write"; path: string; offset: number; data: string; truncate?: boolean } & ExpectedVersion)
+  | ({ op: "create"; path: string; kind: SharedKind; mode: number; uid: number; gid: number; data: string | null; target: string | null } & ExpectedVersion)
+  | ({ op: "write"; path: string; offset: number; data: string; truncate: boolean | null } & ExpectedVersion)
   | ({ op: "truncate"; path: string; size: number } & ExpectedVersion)
-  | ({ op: "rename"; from: string; to: string; expectedTargetVersion?: number | null } & ExpectedVersion)
+  | ({ op: "rename"; from: string; to: string; expectedTargetVersion: number | null | "unchecked" } & ExpectedVersion)
   | ({ op: "unlink"; path: string } & ExpectedVersion)
   | ({ op: "mkdir"; path: string; mode: number; uid: number; gid: number } & ExpectedVersion)
   | ({ op: "rmdir"; path: string } & ExpectedVersion)
   | ({ op: "chmod"; path: string; mode: number } & ExpectedVersion)
   | ({ op: "chown"; path: string; uid: number; gid: number } & ExpectedVersion)
   | ({ op: "link"; from: string; to: string } & ExpectedVersion)
-  | ({ op: "symlink"; path: string; target: string; mode?: number; uid?: number; gid?: number } & ExpectedVersion)
-  | ({ op: "fsync"; path?: string } & ExpectedVersion);
+  | ({ op: "symlink"; path: string; target: string; mode: number | null; uid: number | null; gid: number | null } & ExpectedVersion)
+  | ({ op: "fsync"; path: string | null } & ExpectedVersion);
 
 export interface SharedTransaction {
   schema: typeof SHARED_FS_SCHEMA;
@@ -71,7 +74,7 @@ export interface SharedTransaction {
   clientId: string;
   leaseId: string;
   baseGeneration: number;
-  imageGeneration?: number;
+  imageGeneration: number | null;
   operations: SharedOperation[];
 }
 
@@ -83,7 +86,7 @@ export interface SharedCommitResult {
 
 export interface LeaseRequest {
   clientId: string;
-  ttlMs?: number;
+  ttlMs: number | null;
 }
 
 export interface Lease {
@@ -97,7 +100,7 @@ export interface LockRequest {
   leaseId: string;
   owner: string;
   exclusive: boolean;
-  ttlMs?: number;
+  ttlMs: number | null;
 }
 
 export interface AdvisoryLock extends LockRequest {
@@ -107,8 +110,8 @@ export interface AdvisoryLock extends LockRequest {
 
 export interface ConflictDetail {
   path: string;
-  expected?: number | null;
-  actual?: number | null;
+  expected: number | null;
+  actual: number | null;
   reason: string;
 }
 
@@ -116,7 +119,7 @@ export class SharedFsError extends Error {
   constructor(
     readonly code: "EINVAL" | "ENOENT" | "EEXIST" | "ENOTDIR" | "EISDIR" | "ENOTEMPTY" | "ESTALE" | "ELOCKED" | "EROFS",
     message: string,
-    readonly detail?: ConflictDetail,
+    readonly detail: ConflictDetail | null = null,
   ) {
     super(message);
     this.name = "SharedFsError";
@@ -132,10 +135,10 @@ export const encodeBytes = (bytes: Uint8Array): string => {
     const b = bytes[index + 1] ?? 0;
     const c = bytes[index + 2] ?? 0;
     const value = (a << 16) | (b << 8) | c;
-    output += alphabet[(value >>> 18) & 63];
-    output += alphabet[(value >>> 12) & 63];
-    output += index + 1 < bytes.length ? alphabet[(value >>> 6) & 63] : "=";
-    output += index + 2 < bytes.length ? alphabet[value & 63] : "=";
+    output += alphabet.charAt((value >>> 18) & 63);
+    output += alphabet.charAt((value >>> 12) & 63);
+    output += index + 1 < bytes.length ? alphabet.charAt((value >>> 6) & 63) : "=";
+    output += index + 2 < bytes.length ? alphabet.charAt(value & 63) : "=";
   }
   return output;
 };
@@ -149,12 +152,12 @@ export const decodeBytes = (value: string | null = null): Uint8Array => {
     const chars = clean.slice(index, index + 4);
     const numbers = [...chars].map(char => char === "=" ? 0 : alphabet.indexOf(char));
     if (numbers.some(number => number < 0)) throw new SharedFsError("EINVAL", "invalid base64 payload");
-    const [a, b, c, d] = numbers;
+    const a = numbers[0] ?? null, b = numbers[1] ?? null, c = numbers[2] ?? null, d = numbers[3] ?? null;
     if (a == null || b == null || c == null || d == null) throw new SharedFsError("EINVAL", "incomplete base64 quartet");
     const packed = (a << 18) | (b << 12) | (c << 6) | d;
     output.push((packed >>> 16) & 255);
-    if (chars[2] !== "=") output.push((packed >>> 8) & 255);
-    if (chars[3] !== "=") output.push(packed & 255);
+    if (chars.charAt(2) !== "=") output.push((packed >>> 8) & 255);
+    if (chars.charAt(3) !== "=") output.push(packed & 255);
   }
   return Uint8Array.from(output);
 };

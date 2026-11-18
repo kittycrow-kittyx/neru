@@ -1,4 +1,4 @@
-import { parseJson } from "./wire.js";
+import { parseJson, wireValue } from "./wire.js";
 import type { JsonValue } from "./wire.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -12,6 +12,7 @@ import {
 } from "./protocol.js";
 import type {
   AdvisoryLock,
+  GenerationMetadata,
   Lease,
   LeaseRequest,
   LockRequest,
@@ -26,12 +27,7 @@ import type {
 
 export type { StoredInode } from "./protocol.js";
 
-export interface StoredState {
-  schema: typeof SHARED_FS_SCHEMA;
-  filesystemId: string;
-  generation: number;
-  imageGeneration: number;
-  committedAt: string;
+export interface StoredState extends GenerationMetadata {
   nextInode: number;
   paths: Map<string, string>;
   inodes: Map<string, StoredInode>;
@@ -88,7 +84,7 @@ const dataChecksum = (bytes: Uint8Array): string => {
 
 const cloneInode = (inode: StoredInode): StoredInode => ({
   ...inode,
-  ...(inode.data ? { data: Uint8Array.from(inode.data) } : {}),
+  data: inode.data ? Uint8Array.from(inode.data) : null,
 });
 
 export const cloneState = (state: StoredState): StoredState => ({
@@ -109,7 +105,7 @@ export const initialState = (filesystemId: string = randomUUID()): StoredState =
     mtimeMs: timestamp,
     ctimeMs: timestamp,
     version: 1,
-    nlink: 1,
+    nlink: 1, data: null, target: null,
   };
   return {
     schema: SHARED_FS_SCHEMA,
@@ -125,7 +121,7 @@ export const initialState = (filesystemId: string = randomUUID()): StoredState =
 
 export class MemoryPersistence implements SharedPersistence {
   private state: StoredState | null;
-  constructor(seed?: StoredState) {
+  constructor(seed: StoredState | null = null) {
     this.state = seed ? cloneState(seed) : null;
   }
   async load(): Promise<StoredState | null> {
@@ -138,9 +134,9 @@ export class MemoryPersistence implements SharedPersistence {
 
 const entryFor = (state: StoredState, path: string): SharedEntry => {
   // The wire entry includes encoded data only for regular files; links retain their target rather than file bytes.
-  const inodeId = state.paths.get(path);
+  const inodeId = state.paths.get(path) ?? null;
   if (!inodeId) throw new SharedFsError("ENOENT", path);
-  const inode = state.inodes.get(inodeId);
+  const inode = state.inodes.get(inodeId) ?? null;
   if (!inode) throw new Error(`missing inode ${inodeId}`);
   const base: SharedEntry = {
     path,
@@ -154,6 +150,7 @@ const entryFor = (state: StoredState, path: string): SharedEntry => {
     ctimeMs: inode.ctimeMs,
     version: inode.version,
     nlink: inode.nlink,
+    size: null, checksum: null, data: null, target: null,
   };
   if (inode.kind === "file") {
     const data = inode.data ?? new Uint8Array();
@@ -177,7 +174,7 @@ export const snapshotState = (state: StoredState): SharedSnapshot => {
     committedAt: state.committedAt,
     entries,
   };
-  return { ...payload, checksum: fnv(canonical(parseJson(JSON.stringify(payload)))) };
+  return { ...payload, checksum: fnv(canonical(wireValue(parseJson(JSON.stringify(payload))))) };
 };
 
 export const stateFromSnapshot = (snapshot: SharedSnapshot): StoredState => {
@@ -202,8 +199,8 @@ export const stateFromSnapshot = (snapshot: SharedSnapshot): StoredState => {
       ctimeMs: entry.ctimeMs,
       version: entry.version,
       nlink: entry.nlink,
-      ...(entry.kind === "file" ? { data: decodeBytes(entry.data ?? null) } : {}),
-      ...(entry.kind === "symlink" ? { target: entry.target ?? "" } : {}),
+      data: entry.kind === "file" ? decodeBytes(entry.data) : null,
+      target: entry.kind === "symlink" ? entry.target ?? "" : null,
     });
   }
   if (!paths.has("/")) throw new SharedFsError("EINVAL", "snapshot has no root directory");
@@ -242,9 +239,9 @@ export class AuthoritativeFilesystem {
 
   static async open(
     persistence: SharedPersistence = new MemoryPersistence(),
-    options: { filesystemId?: string; clock?: () => number } = {},
+    options: { filesystemId: string | null; clock: (() => number) | null } = { filesystemId: null, clock: null },
   ): Promise<AuthoritativeFilesystem> {
-    const state = await persistence.load() ?? initialState(options.filesystemId);
+    const state = await persistence.load() ?? initialState(options.filesystemId ?? randomUUID());
     return new AuthoritativeFilesystem(persistence, state, options.clock ?? now);
   }
 
@@ -287,11 +284,11 @@ export class AuthoritativeFilesystem {
     return { ...lease };
   }
 
-  heartbeat(leaseId: string, ttlMs = 30_000): Lease {
+  heartbeat(leaseId: string, ttlMs: number | null = null): Lease {
     this.recoverExpired();
-    const lease = this.leases.get(leaseId);
+    const lease = this.leases.get(leaseId) ?? null;
     if (!lease) throw new SharedFsError("ESTALE", "lease expired");
-    lease.expiresAt = this.clock() + Math.max(1_000, Math.min(ttlMs, 300_000));
+    lease.expiresAt = this.clock() + Math.max(1_000, Math.min(ttlMs ?? 30_000, 300_000));
     return { ...lease };
   }
 
@@ -319,7 +316,7 @@ export class AuthoritativeFilesystem {
   }
 
   releaseLock(lockId: string, leaseId: string): void {
-    const lock = this.locks.get(lockId);
+    const lock = this.locks.get(lockId) ?? null;
     if (lock && lock.leaseId === leaseId) this.locks.delete(lockId);
   }
 
@@ -400,7 +397,7 @@ export class AuthoritativeFilesystem {
 
   private requireLease(leaseId: string): Lease {
     this.recoverExpired();
-    const lease = this.leases.get(leaseId);
+    const lease = this.leases.get(leaseId) ?? null;
     if (!lease) throw new SharedFsError("ESTALE", "lease expired or unknown");
     return lease;
   }
@@ -412,7 +409,7 @@ export class AuthoritativeFilesystem {
         ? [operation.from, operation.to]
         : operation.op === "fsync" && !operation.path
           ? []
-          : ["path" in operation ? operation.path : "/"];
+          : ["path" in operation ? operation.path ?? "/" : "/"];
     for (const raw of paths) {
       const path = normaliseSharedPath(raw);
       for (const lock of this.locks.values()) {
@@ -425,7 +422,7 @@ export class AuthoritativeFilesystem {
 
   private inodeAt(state: StoredState, rawPath: string): StoredInode {
     const path = normaliseSharedPath(rawPath);
-    const id = state.paths.get(path);
+    const id = state.paths.get(path) ?? null;
     const inode = id ? state.inodes.get(id) ?? null : null;
     if (!inode) throw new SharedFsError("ENOENT", path);
     return inode;
@@ -433,7 +430,7 @@ export class AuthoritativeFilesystem {
 
   private assertExpected(path: string, inode: StoredInode | null, expected: number | null): void {
     if (expected === null) return;
-    const actual = inode?.version ?? null;
+    const actual = inode ? inode.version : null;
     if (actual !== expected) {
       throw new SharedFsError("ESTALE", `${path}: generation conflict`, {
         path,
@@ -483,18 +480,18 @@ export class AuthoritativeFilesystem {
       ctimeMs: timestamp,
       version: 1,
       nlink: 1,
-      ...(kind === "file" ? { data: data ?? new Uint8Array() } : {}),
-      ...(kind === "symlink" ? { target: target ?? "" } : {}),
+      data: kind === "file" ? data : null,
+      target: kind === "symlink" ? target ?? "" : null,
     };
     state.inodes.set(inode.id, inode);
     return inode;
   }
 
   private removePath(state: StoredState, path: string): void {
-    const id = state.paths.get(path);
+    const id = state.paths.get(path) ?? null;
     if (!id) return;
     state.paths.delete(path);
-    const inode = state.inodes.get(id);
+    const inode = state.inodes.get(id) ?? null;
     if (!inode) return;
     inode.nlink--;
     if (inode.nlink <= 0) state.inodes.delete(id);
@@ -516,11 +513,11 @@ export class AuthoritativeFilesystem {
         return;
       }
       case "mkdir": {
-        this.apply(state, { op: "create", path: operation.path, kind: "directory", mode: operation.mode, uid: operation.uid, gid: operation.gid });
+        this.apply(state, { op: "create", path: operation.path, kind: "directory", mode: operation.mode, uid: operation.uid, gid: operation.gid, data: null, target: null, expectedVersion: operation.expectedVersion });
         return;
       }
       case "symlink": {
-        this.apply(state, { op: "create", path: operation.path, kind: "symlink", mode: operation.mode ?? 0o777, uid: operation.uid ?? 0, gid: operation.gid ?? 0, target: operation.target });
+        this.apply(state, { op: "create", path: operation.path, kind: "symlink", mode: operation.mode ?? 0o777, uid: operation.uid ?? 0, gid: operation.gid ?? 0, target: operation.target, data: null, expectedVersion: operation.expectedVersion });
         return;
       }
       case "write": {
@@ -612,14 +609,14 @@ export class AuthoritativeFilesystem {
         const source = this.inodeAt(state, from);
         this.assertExpected(from, source, operation.expectedVersion ?? null);
         this.requireParent(state, to);
-        const targetId = state.paths.get(to);
+        const targetId = state.paths.get(to) ?? null;
         const target = targetId ? state.inodes.get(targetId) ?? null : null;
         const expectedTarget = operation.expectedTargetVersion;
-        const actual = target?.version ?? null;
-        if (Object.hasOwn(operation, "expectedTargetVersion") && actual !== expectedTarget) throw new SharedFsError("ESTALE", `${to}: target generation conflict`, { path: to, expected: expectedTarget ?? null, actual, reason: "rename target changed" });
-        if (target?.kind === "directory" && [...state.paths.keys()].some(path => path.startsWith(`${to}/`))) throw new SharedFsError("ENOTEMPTY", to);
+        const actual = target ? target.version : null;
+        if (expectedTarget !== "unchecked" && actual !== expectedTarget) throw new SharedFsError("ESTALE", `${to}: target generation conflict`, { path: to, expected: expectedTarget ?? null, actual, reason: "rename target changed" });
+        if (target !== null && target.kind === "directory" && [...state.paths.keys()].some(path => path.startsWith(`${to}/`))) throw new SharedFsError("ENOTEMPTY", to);
         if (target && source.kind === "directory" && target.kind !== "directory") throw new SharedFsError("ENOTDIR", to);
-        if (source.kind !== "directory" && target?.kind === "directory") throw new SharedFsError("EISDIR", to);
+        if (source.kind !== "directory" && target !== null && target.kind === "directory") throw new SharedFsError("EISDIR", to);
         if (target) this.removePath(state, to);
         const moving = [...state.paths.entries()]
           .filter(([path]) => path === from || path.startsWith(`${from}/`))

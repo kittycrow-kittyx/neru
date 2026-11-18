@@ -5,9 +5,81 @@ import type { AdvisoryLock, ConflictDetail, InodeMetadata, Lease, LeaseRequest, 
 export type JsonValue = string | number | boolean | null | JsonValue[] | JsonObject;
 export interface JsonObject { [key: string]: JsonValue; }
 
-export function parseJson(text: string): JsonValue {
-  const value: JsonValue = JSON.parse(text);
-  return value;
+// Decode the JSON grammar directly so an untyped host parser cannot bypass the binary boundary.
+class JsonReader {
+  private at = 0;
+  constructor(private readonly source: string) {}
+  private whitespace(): void {
+    while (this.at < this.source.length && /[ \t\r\n]/.test(this.source.charAt(this.at))) this.at++;
+  }
+  private take(s: string): boolean {
+    this.whitespace();
+    if (!this.source.startsWith(s, this.at)) return false;
+    this.at += s.length;
+    return true;
+  }
+  private string(): string {
+    this.whitespace();
+    const match = /^"((?:[^"\\\x00-\x1f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*)"/.exec(this.source.slice(this.at));
+    if (!match) throw new Error("invalid JSON string");
+    this.at += match[0].length;
+    const escapes: Record<string, string> = { '"': '"', "\\": "\\", "/": "/", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t" };
+    return (match[1] ?? "").replace(/\\(u[0-9a-fA-F]{4}|["\\/bfnrt])/g, (_match: string, code: string) => code.startsWith("u") ? String.fromCharCode(Number.parseInt(code.slice(1), 16)) : escapes[code] ?? "");
+  }
+  private object(): JsonObject {
+    const value: JsonObject = {};
+    if (this.take("}")) return value;
+    do {
+      const key = this.string();
+      if (!this.take(":")) throw new Error("invalid JSON member");
+      Object.defineProperty(value, key, { value: this.value(), enumerable: true, configurable: true, writable: true });
+    } while (this.take(","));
+    if (!this.take("}")) throw new Error("invalid JSON object");
+    return value;
+  }
+  private array(): JsonValue[] {
+    const value: JsonValue[] = [];
+    if (this.take("]")) return value;
+    do { value.push(this.value()); } while (this.take(","));
+    if (!this.take("]")) throw new Error("invalid JSON array");
+    return value;
+  }
+  private value(): JsonValue {
+    this.whitespace();
+    if (this.take("{")) return this.object();
+    if (this.take("[")) return this.array();
+    if (this.source.charAt(this.at) === '"') return this.string();
+    if (this.take("true")) return true;
+    if (this.take("false")) return false;
+    if (this.take("null")) return null;
+    const match = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(this.source.slice(this.at));
+    if (!match) throw new Error("invalid JSON value");
+    this.at += match[0].length;
+    return Number(match[0]);
+  }
+  parse(): JsonValue {
+    const result = this.value();
+    this.whitespace();
+    if (this.at !== this.source.length) throw new Error("trailing JSON data");
+    return result;
+  }
+}
+
+export function parseJson(text: string): JsonValue { return new JsonReader(text).parse(); }
+
+// The version-one wire format omits absent fields. Preserve explicit null
+// conflict versions, and omit only the unchecked rename-target sentinel.
+const omittedNullKeys = new Set(["size", "checksum", "data", "target", "blob", "expectedVersion", "truncate", "mode", "uid", "gid", "path", "imageGeneration", "ttlMs", "detail", "code", "generation"]);
+export function wireValue(value: JsonValue): JsonValue {
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(wireValue);
+  const result: JsonObject = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (item === null && omittedNullKeys.has(key)) continue;
+    if (key === "expectedTargetVersion" && item === "unchecked") continue;
+    Object.defineProperty(result, key, { value: wireValue(item), enumerable: true, writable: true, configurable: true });
+  }
+  return result;
 }
 
 export function record(value: JsonValue): JsonObject {
@@ -72,13 +144,13 @@ function readEntry(raw: JsonValue): SharedEntry {
   const value = record(raw);
   const size = optionalNumber(value, "size"), checksum = optionalString(value, "checksum"), data = optionalString(value, "data"), target = optionalString(value, "target");
   return { path: stringField(value, "path"), inode: stringField(value, "inode"), ...metadata(value),
-    ...(size !== null ? { size } : {}), ...(checksum !== null ? { checksum } : {}), ...(data !== null ? { data } : {}), ...(target !== null ? { target } : {}) };
+    size, checksum, data, target };
 }
 
 export function readManifestInode(raw: JsonValue): ManifestInode {
   const value = record(raw);
   const blob = optionalString(value, "blob"), target = optionalString(value, "target");
-  return { id: stringField(value, "id"), ...metadata(value), ...(blob !== null ? { blob } : {}), ...(target !== null ? { target } : {}) };
+  return { id: stringField(value, "id"), ...metadata(value), blob, target };
 }
 
 export function readSnapshot(raw: JsonValue): SharedSnapshot {
@@ -93,9 +165,9 @@ export function readLease(raw: JsonValue): Lease {
   return { leaseId: stringField(value, "leaseId"), clientId: stringField(value, "clientId"), expiresAt: numberField(value, "expiresAt") };
 }
 
-export function readHeartbeat(raw: JsonValue): { ttlMs?: number } {
+export function readHeartbeat(raw: JsonValue): { ttlMs: number | null } {
   const ttlMs = optionalNumber(record(raw), "ttlMs");
-  return ttlMs === null ? {} : { ttlMs };
+  return { ttlMs };
 }
 
 export function readLeaseRequest(raw: JsonValue): LeaseRequest {
@@ -125,37 +197,37 @@ export function readCommit(raw: JsonValue): SharedCommitResult {
 
 function readCreate(value: JsonObject): SharedOperation {
   const data = optionalString(value, "data"), target = optionalString(value, "target");
-  return { op: "create", path: stringField(value, "path"), kind: kind(value), mode: numberField(value, "mode"),
-    uid: numberField(value, "uid"), gid: numberField(value, "gid"), ...(data !== null ? { data } : {}), ...(target !== null ? { target } : {}) };
+  return { op: "create", expectedVersion: optionalNumber(value, "expectedVersion"), path: stringField(value, "path"), kind: kind(value), mode: numberField(value, "mode"),
+    uid: numberField(value, "uid"), gid: numberField(value, "gid"), data, target };
 }
 
 function readWrite(value: JsonObject): SharedOperation {
-  return { op: "write", path: stringField(value, "path"), offset: numberField(value, "offset"), data: stringField(value, "data"),
-    ...(Object.hasOwn(value, "truncate") ? { truncate: booleanField(value, "truncate") } : {}) };
+  return { op: "write", expectedVersion: optionalNumber(value, "expectedVersion"), path: stringField(value, "path"), offset: numberField(value, "offset"), data: stringField(value, "data"),
+    truncate: Object.hasOwn(value, "truncate") ? booleanField(value, "truncate") : null };
 }
 
 function readRename(value: JsonObject): SharedOperation {
   // An omitted expected target skips the version check; null explicitly requires the target to be absent.
   const target = field(value, "expectedTargetVersion");
   const expectedTargetVersion = target === null ? null : numberField(value, "expectedTargetVersion");
-  return { op: "rename", from: stringField(value, "from"), to: stringField(value, "to"),
-    ...(Object.hasOwn(value, "expectedTargetVersion") ? { expectedTargetVersion } : {}) };
+  return { op: "rename", expectedVersion: optionalNumber(value, "expectedVersion"), from: stringField(value, "from"), to: stringField(value, "to"),
+    expectedTargetVersion: Object.hasOwn(value, "expectedTargetVersion") ? expectedTargetVersion : "unchecked" };
 }
 
 function readSymlink(value: JsonObject): SharedOperation {
   const mode = optionalNumber(value, "mode"), uid = optionalNumber(value, "uid"), gid = optionalNumber(value, "gid");
-  return { op: "symlink", path: stringField(value, "path"), target: stringField(value, "target"),
-    ...(mode !== null ? { mode } : {}), ...(uid !== null ? { uid } : {}), ...(gid !== null ? { gid } : {}) };
+  return { op: "symlink", expectedVersion: optionalNumber(value, "expectedVersion"), path: stringField(value, "path"), target: stringField(value, "target"),
+    mode, uid, gid };
 }
 
 function readPathOperation(value: JsonObject, op: string): SharedOperation {
   const path = stringField(value, "path");
   switch (op) {
-    case "truncate": return { op, path, size: numberField(value, "size") };
-    case "unlink": case "rmdir": return { op, path };
-    case "mkdir": return { op, path, mode: numberField(value, "mode"), uid: numberField(value, "uid"), gid: numberField(value, "gid") };
-    case "chmod": return { op, path, mode: numberField(value, "mode") };
-    case "chown": return { op, path, uid: numberField(value, "uid"), gid: numberField(value, "gid") };
+    case "truncate": return { op, expectedVersion: optionalNumber(value, "expectedVersion"), path, size: numberField(value, "size") };
+    case "unlink": case "rmdir": return { op, expectedVersion: optionalNumber(value, "expectedVersion"), path };
+    case "mkdir": return { op, expectedVersion: optionalNumber(value, "expectedVersion"), path, mode: numberField(value, "mode"), uid: numberField(value, "uid"), gid: numberField(value, "gid") };
+    case "chmod": return { op, expectedVersion: optionalNumber(value, "expectedVersion"), path, mode: numberField(value, "mode") };
+    case "chown": return { op, expectedVersion: optionalNumber(value, "expectedVersion"), path, uid: numberField(value, "uid"), gid: numberField(value, "gid") };
     default: throw new SharedFsError("EINVAL", "unsupported filesystem operation");
   }
 }
@@ -167,26 +239,21 @@ function readOperationBody(value: JsonObject): SharedOperation {
     case "write": return readWrite(value);
     case "rename": return readRename(value);
     case "symlink": return readSymlink(value);
-    case "link": return { op, from: stringField(value, "from"), to: stringField(value, "to") };
-    case "fsync": return Object.hasOwn(value, "path") ? { op, path: stringField(value, "path") } : { op };
+    case "link": return { op, expectedVersion: optionalNumber(value, "expectedVersion"), from: stringField(value, "from"), to: stringField(value, "to") };
+    case "fsync": return { op, expectedVersion: optionalNumber(value, "expectedVersion"), path optionalString(value, "path") };
     default: return readPathOperation(value, op);
   }
 }
 
 export function readOperations(value: JsonObject): SharedOperation[] {
-  return arrayField(value, "operations").map(raw => {
-    const entry = record(raw);
-    const operation = readOperationBody(entry);
-    const expectedVersion = optionalNumber(entry, "expectedVersion");
-    return expectedVersion === null ? operation : { ...operation, expectedVersion };
-  });
+  return arrayField(value, "operations").map(raw => readOperationBody(record(raw)));
 }
 
 export function readTransaction(raw: JsonValue): SharedTransaction {
   const value = record(raw), imageGeneration = optionalNumber(value, "imageGeneration");
   return { schema: schema(value), transactionId: stringField(value, "transactionId"), clientId: stringField(value, "clientId"),
     leaseId: stringField(value, "leaseId"), baseGeneration: numberField(value, "baseGeneration"), operations: readOperations(value),
-    ...(imageGeneration !== null ? { imageGeneration } : {}) };
+    imageGeneration };
 }
 
 function conflictValue(value: JsonObject, key: string): number | null {
@@ -196,8 +263,7 @@ function conflictValue(value: JsonObject, key: string): number | null {
 function readConflict(raw: JsonValue): ConflictDetail {
   const value = record(raw);
   return { path: stringField(value, "path"), reason: stringField(value, "reason"),
-    ...(Object.hasOwn(value, "expected") ? { expected: conflictValue(value, "expected") } : {}),
-    ...(Object.hasOwn(value, "actual") ? { actual: conflictValue(value, "actual") } : {}) };
+    expected: conflictValue(value, "expected"), actual: conflictValue(value, "actual") };
 }
 
 function errorCode(raw: JsonValue): SharedFsError["code"] {

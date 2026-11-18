@@ -8,3 +8,5 @@
 - `readHttpError`: convert an HTTP failure payload to a filesystem error.
 
 Malformed fields raise a filesystem error. Omitted optional fields remain absent; explicit null target versions retain their conflict-check semantics.
+
+`wireValue` preserves version-one JSON omissions and explicit conflict versions when writing wire data.
