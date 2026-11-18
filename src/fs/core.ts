@@ -1,3 +1,5 @@
+import { parseJson } from "./wire.js";
+import type { JsonValue } from "./wire.js";
 import { randomUUID } from "node:crypto";
 import {
   SHARED_FS_SCHEMA,
@@ -57,10 +59,10 @@ const parentPath = (path: string): string => {
   return index <= 0 ? "/" : path.slice(0, index);
 };
 
-const canonical = (value: unknown): string => {
+const canonical = (value: JsonValue): string => {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  return `{${Object.entries(value as Record<string, unknown>)
+  return `{${Object.entries(value)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`)
     .join(",")}}`;
@@ -175,7 +177,7 @@ export const snapshotState = (state: StoredState): SharedSnapshot => {
     committedAt: state.committedAt,
     entries,
   };
-  return { ...payload, checksum: fnv(canonical(payload)) };
+  return { ...payload, checksum: fnv(canonical(parseJson(JSON.stringify(payload)))) };
 };
 
 export const stateFromSnapshot = (snapshot: SharedSnapshot): StoredState => {
@@ -200,7 +202,7 @@ export const stateFromSnapshot = (snapshot: SharedSnapshot): StoredState => {
       ctimeMs: entry.ctimeMs,
       version: entry.version,
       nlink: entry.nlink,
-      ...(entry.kind === "file" ? { data: decodeBytes(entry.data) } : {}),
+      ...(entry.kind === "file" ? { data: decodeBytes(entry.data ?? null) } : {}),
       ...(entry.kind === "symlink" ? { target: entry.target ?? "" } : {}),
     });
   }
@@ -369,7 +371,7 @@ export class AuthoritativeFilesystem {
 
   private async exclusive<T>(work: () => Promise<T>): Promise<T> {
     const current = this.serial.then(work, work);
-    this.serial = current.then(() => undefined, () => undefined);
+    this.serial = current.then(() => {}, () => {});
     return await current;
   }
 
@@ -424,13 +426,13 @@ export class AuthoritativeFilesystem {
   private inodeAt(state: StoredState, rawPath: string): StoredInode {
     const path = normaliseSharedPath(rawPath);
     const id = state.paths.get(path);
-    const inode = id ? state.inodes.get(id) : undefined;
+    const inode = id ? state.inodes.get(id) ?? null : null;
     if (!inode) throw new SharedFsError("ENOENT", path);
     return inode;
   }
 
-  private assertExpected(path: string, inode: StoredInode | undefined, expected: number | undefined): void {
-    if (expected === undefined) return;
+  private assertExpected(path: string, inode: StoredInode | null, expected: number | null): void {
+    if (expected === null) return;
     const actual = inode?.version ?? null;
     if (actual !== expected) {
       throw new SharedFsError("ESTALE", `${path}: generation conflict`, {
@@ -468,7 +470,7 @@ export class AuthoritativeFilesystem {
 
   private allocate(state: StoredState, operation: Extract<SharedOperation, { op: "create" }>): StoredInode {
     const { kind, mode, uid, gid, target } = operation;
-    const data = decodeBytes(operation.data);
+    const data = decodeBytes(operation.data ?? null);
     const timestamp = this.clock();
     const inode: StoredInode = {
       id: String(state.nextInode++),
@@ -507,7 +509,7 @@ export class AuthoritativeFilesystem {
         if (path === "/") throw new SharedFsError("EEXIST", path);
         if (state.paths.has(path)) throw new SharedFsError("EEXIST", path);
         this.requireParent(state, path);
-        if (operation.kind === "symlink" && operation.target === undefined) throw new SharedFsError("EINVAL", `${path}: symlink target missing`);
+        if (operation.kind === "symlink" && operation.target == null) throw new SharedFsError("EINVAL", `${path}: symlink target missing`);
         const inode = this.allocate(state, operation);
         state.paths.set(path, inode.id);
         this.touchParent(state, path);
@@ -524,11 +526,11 @@ export class AuthoritativeFilesystem {
       case "write": {
         const path = this.requireShared(operation.path);
         const inode = this.inodeAt(state, path);
-        this.assertExpected(path, inode, operation.expectedVersion);
+        this.assertExpected(path, inode, operation.expectedVersion ?? null);
         if (inode.kind === "directory") throw new SharedFsError("EISDIR", path);
         if (inode.kind !== "file") throw new SharedFsError("EINVAL", `${path}: not a regular file`);
         if (!Number.isSafeInteger(operation.offset) || operation.offset < 0) throw new SharedFsError("EINVAL", `${path}: invalid write offset`);
-        const input = decodeBytes(operation.data);
+        const input = decodeBytes(operation.data ?? null);
         const old = operation.truncate ? new Uint8Array() : inode.data ?? new Uint8Array();
         const length = Math.max(old.length, operation.offset + input.length);
         const output = new Uint8Array(length);
@@ -541,7 +543,7 @@ export class AuthoritativeFilesystem {
       case "truncate": {
         const path = this.requireShared(operation.path);
         const inode = this.inodeAt(state, path);
-        this.assertExpected(path, inode, operation.expectedVersion);
+        this.assertExpected(path, inode, operation.expectedVersion ?? null);
         if (inode.kind !== "file") throw new SharedFsError(inode.kind === "directory" ? "EISDIR" : "EINVAL", path);
         if (!Number.isSafeInteger(operation.size) || operation.size < 0) throw new SharedFsError("EINVAL", `${path}: invalid size`);
         const next = new Uint8Array(operation.size);
@@ -553,7 +555,7 @@ export class AuthoritativeFilesystem {
       case "chmod": {
         const path = this.requireShared(operation.path);
         const inode = this.inodeAt(state, path);
-        this.assertExpected(path, inode, operation.expectedVersion);
+        this.assertExpected(path, inode, operation.expectedVersion ?? null);
         inode.mode = operation.mode & 0o7777;
         this.touch(inode);
         return;
@@ -561,7 +563,7 @@ export class AuthoritativeFilesystem {
       case "chown": {
         const path = this.requireShared(operation.path);
         const inode = this.inodeAt(state, path);
-        this.assertExpected(path, inode, operation.expectedVersion);
+        this.assertExpected(path, inode, operation.expectedVersion ?? null);
         inode.uid = operation.uid;
         inode.gid = operation.gid;
         this.touch(inode);
@@ -571,7 +573,7 @@ export class AuthoritativeFilesystem {
         const from = this.requireShared(operation.from);
         const to = this.requireShared(operation.to);
         const inode = this.inodeAt(state, from);
-        this.assertExpected(from, inode, operation.expectedVersion);
+        this.assertExpected(from, inode, operation.expectedVersion ?? null);
         if (inode.kind === "directory") throw new SharedFsError("EISDIR", from);
         if (state.paths.has(to)) throw new SharedFsError("EEXIST", to);
         this.requireParent(state, to);
@@ -585,7 +587,7 @@ export class AuthoritativeFilesystem {
         const path = this.requireShared(operation.path);
         if (path === "/") throw new SharedFsError("EINVAL", "cannot unlink root");
         const inode = this.inodeAt(state, path);
-        this.assertExpected(path, inode, operation.expectedVersion);
+        this.assertExpected(path, inode, operation.expectedVersion ?? null);
         if (inode.kind === "directory") throw new SharedFsError("EISDIR", path);
         this.removePath(state, path);
         this.touchParent(state, path);
@@ -595,7 +597,7 @@ export class AuthoritativeFilesystem {
         const path = this.requireShared(operation.path);
         if (path === "/") throw new SharedFsError("EINVAL", "cannot remove root");
         const inode = this.inodeAt(state, path);
-        this.assertExpected(path, inode, operation.expectedVersion);
+        this.assertExpected(path, inode, operation.expectedVersion ?? null);
         if (inode.kind !== "directory") throw new SharedFsError("ENOTDIR", path);
         if ([...state.paths.keys()].some(other => other.startsWith(`${path}/`))) throw new SharedFsError("ENOTEMPTY", path);
         this.removePath(state, path);
@@ -608,13 +610,13 @@ export class AuthoritativeFilesystem {
         if (from === "/" || to === "/") throw new SharedFsError("EINVAL", "cannot rename root");
         if (to.startsWith(`${from}/`)) throw new SharedFsError("EINVAL", "cannot move a directory inside itself");
         const source = this.inodeAt(state, from);
-        this.assertExpected(from, source, operation.expectedVersion);
+        this.assertExpected(from, source, operation.expectedVersion ?? null);
         this.requireParent(state, to);
         const targetId = state.paths.get(to);
-        const target = targetId ? state.inodes.get(targetId) : undefined;
+        const target = targetId ? state.inodes.get(targetId) ?? null : null;
         const expectedTarget = operation.expectedTargetVersion;
         const actual = target?.version ?? null;
-        if (expectedTarget !== undefined && actual !== expectedTarget) throw new SharedFsError("ESTALE", `${to}: target generation conflict`, { path: to, expected: expectedTarget, actual, reason: "rename target changed" });
+        if (Object.hasOwn(operation, "expectedTargetVersion") && actual !== expectedTarget) throw new SharedFsError("ESTALE", `${to}: target generation conflict`, { path: to, expected: expectedTarget ?? null, actual, reason: "rename target changed" });
         if (target?.kind === "directory" && [...state.paths.keys()].some(path => path.startsWith(`${to}/`))) throw new SharedFsError("ENOTEMPTY", to);
         if (target && source.kind === "directory" && target.kind !== "directory") throw new SharedFsError("ENOTDIR", to);
         if (source.kind !== "directory" && target?.kind === "directory") throw new SharedFsError("EISDIR", to);
@@ -633,7 +635,7 @@ export class AuthoritativeFilesystem {
         if (operation.path) {
           const path = this.requireShared(operation.path);
           const inode = this.inodeAt(state, path);
-          this.assertExpected(path, inode, operation.expectedVersion);
+          this.assertExpected(path, inode, operation.expectedVersion ?? null);
         }
         return;
       }

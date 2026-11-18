@@ -140,7 +140,7 @@ export const encodeBytes = (bytes: Uint8Array): string => {
   return output;
 };
 
-export const decodeBytes = (value: string | undefined): Uint8Array => {
+export const decodeBytes = (value: string | null = null): Uint8Array => {
   if (!value) return new Uint8Array();
   const clean = value.replace(/\s+/g, "");
   if (clean.length % 4 !== 0) throw new SharedFsError("EINVAL", "invalid base64 payload");
@@ -150,7 +150,7 @@ export const decodeBytes = (value: string | undefined): Uint8Array => {
     const numbers = [...chars].map(char => char === "=" ? 0 : alphabet.indexOf(char));
     if (numbers.some(number => number < 0)) throw new SharedFsError("EINVAL", "invalid base64 payload");
     const [a, b, c, d] = numbers;
-    if (a === undefined || b === undefined || c === undefined || d === undefined) throw new SharedFsError("EINVAL", "incomplete base64 quartet");
+    if (a == null || b == null || c == null || d == null) throw new SharedFsError("EINVAL", "incomplete base64 quartet");
     const packed = (a << 18) | (b << 12) | (c << 6) | d;
     output.push((packed >>> 16) & 255);
     if (chars[2] !== "=") output.push((packed >>> 8) & 255);

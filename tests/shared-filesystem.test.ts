@@ -33,7 +33,7 @@ const setup = async () => {
 const text = (fs: AuthoritativeFilesystem, path: string): string => {
   const entry = fs.snapshot().entries.find(item => item.path === path);
   assert.ok(entry, `missing ${path}`);
-  return new TextDecoder().decode(decodeBytes(entry.data));
+  return new TextDecoder().decode(decodeBytes(entry.data ?? null));
 };
 
 test("1-2: Teto writes are visible to NERU and NERU writes are visible to Teto", async () => {
@@ -65,7 +65,7 @@ test("3 and 5: concurrent independent files succeed and same-file stale writes c
   await commit(fs, "left", left.leaseId, fs.snapshot().generation, [{ op: "write", path: inode.path, offset: 0, truncate: true, expectedVersion: inode.version, data: encodeBytes(new TextEncoder().encode("new")) }]);
   await assert.rejects(
     commit(fs, "right", right.leaseId, base, [{ op: "write", path: inode.path, offset: 0, truncate: true, expectedVersion: inode.version, data: encodeBytes(new TextEncoder().encode("lost")) }]),
-    (error: unknown) => error instanceof SharedFsError && error.code === "ESTALE",
+    (error) => error instanceof SharedFsError && error.code === "ESTALE",
   );
   assert.equal(text(fs, inode.path), "new");
 });
@@ -121,7 +121,7 @@ test("9: kernel-local roots never enter the shared generation", async () => {
   const fs = await setup();
   const client = lease(fs, "kernel-local");
   for (const path of ["/dev/x", "/proc/x", "/sys/x", "/run/x", "/tmp/x"]) {
-    await assert.rejects(commit(fs, "kernel-local", client.leaseId, fs.snapshot().generation, [{ op: "create", path, kind: "file", mode: 0o600, uid: 0, gid: 0, data: "" }]), (error: unknown) => error instanceof SharedFsError && error.code === "EROFS");
+    await assert.rejects(commit(fs, "kernel-local", client.leaseId, fs.snapshot().generation, [{ op: "create", path, kind: "file", mode: 0o600, uid: 0, gid: 0, data: "" }]), (error) => error instanceof SharedFsError && error.code === "EROFS");
   }
 });
 
@@ -136,7 +136,7 @@ test("11: native Linux and THX clients see one mounted persistent namespace", as
     const seen = await thx.snapshot();
     const item = seen.entries.find(entry => entry.path === "/opt/native");
     assert.ok(item, "missing /opt/native");
-    assert.equal(new TextDecoder().decode(decodeBytes(item.data)), "native");
+    assert.equal(new TextDecoder().decode(decodeBytes(item.data ?? null)), "native");
   } finally { await server.close(); }
 });
 
@@ -154,7 +154,7 @@ test("12: separate remote clients coordinate through one durable authority", asy
       const seen = await second.snapshot();
       const item = seen.entries.find(entry => entry.path === "/var/remote");
       assert.ok(item, "missing /var/remote");
-      assert.equal(new TextDecoder().decode(decodeBytes(item.data)), "durable");
+      assert.equal(new TextDecoder().decode(decodeBytes(item.data ?? null)), "durable");
     } finally { await server.close(); }
     const reopened = await AuthoritativeFilesystem.open(new NodeJournalPersistence(root));
     assert.equal(text(reopened, "/var/remote"), "durable");

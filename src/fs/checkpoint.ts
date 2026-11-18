@@ -1,3 +1,4 @@
+import { field, numberField, parseJson, record, stringField } from "./wire.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -33,9 +34,11 @@ export class NodeCheckpointStore {
 
   async selected(): Promise<CheckpointReference | null> {
     try {
-      const value = JSON.parse(await readFile(this.current, "utf8")) as CheckpointReference;
+      const raw = record(parseJson(await readFile(this.current, "utf8")));
+      if (field(raw, "schema") !== 1) return null;
+      const value: CheckpointReference = { schema: 1, generation: numberField(raw, "generation"), path: stringField(raw, "path"), checksum: stringField(raw, "checksum"), createdAt: stringField(raw, "createdAt") };
       await stat(value.path);
-      return value.schema === 1 ? value : null;
+      return value;
     } catch {
       return null;
     }

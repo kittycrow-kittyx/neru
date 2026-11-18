@@ -1,3 +1,5 @@
+import { arrayField, field, numberField, parseJson, readManifestInode, record, stringField } from "./wire.js";
+import type { JsonValue } from "./wire.js";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -25,7 +27,7 @@ export interface NodePersistenceOptions {
   onStage?: (stage: CommitStage) => void | Promise<void>;
 }
 
-const json = (value: unknown): string => `${JSON.stringify(value, null, 2)}\n`;
+const json = (value: StateManifest | (CommitIntent & { schema: 1 }) | { schema: 1; generation: number; checksum?: string; transactionId?: string; completedAt?: string }): string => `${JSON.stringify(value, null, 2)}\n`;
 const sha256 = (value: Uint8Array | string): string => createHash("sha256").update(value).digest("hex");
 const manifestName = (generation: number): string => `${String(generation).padStart(20, "0")}.json`;
 
@@ -40,7 +42,7 @@ const fsyncDirectory = async (path: string): Promise<void> => {
     try { await handle.sync(); } finally { await handle.close(); }
   } catch (error) {
     // Filesystems may reject directory sync even when file sync and atomic rename work.
-    const code = (error as NodeJS.ErrnoException).code;
+    const code = error instanceof Error && "code" in error ? error.code : null;
     if (code === "EINVAL" || code === "ENOTSUP" || code === "EOPNOTSUPP" || code === "EISDIR" || code === "EBADF") return;
     if (process.platform === "win32" && (code === "EPERM" || code === "EACCES")) return;
     throw error;
@@ -58,10 +60,25 @@ const writeAtomic = async (path: string, value: string | Uint8Array): Promise<vo
 
 const exists = async (path: string): Promise<boolean> => {
   try { await stat(path); return true; } catch (error) {
-    if ((error as { code?: string }).code === "ENOENT") return false;
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
     throw error;
   }
 };
+
+function pathPair(value: JsonValue): [string, string] {
+  if (!Array.isArray(value)) throw new Error("invalid manifest path pair");
+  const [path, inode] = value;
+  if (value.length !== 2 || typeof path !== "string" || typeof inode !== "string") throw new Error("invalid manifest path pair");
+  return [path, inode];
+}
+
+function decodeManifest(raw: JsonValue): StateManifest {
+  const value = record(raw);
+  if (field(value, "schema") !== SHARED_FS_SCHEMA) throw new Error("invalid manifest schema");
+  return { schema: SHARED_FS_SCHEMA, filesystemId: stringField(value, "filesystemId"), generation: numberField(value, "generation"),
+    imageGeneration: numberField(value, "imageGeneration"), committedAt: stringField(value, "committedAt"), nextInode: numberField(value, "nextInode"),
+    paths: arrayField(value, "paths").map(pathPair), inodes: arrayField(value, "inodes").map(readManifestInode), checksum: stringField(value, "checksum") };
+}
 
 export class NodeJournalPersistence implements SharedPersistence {
   readonly generations: string;
@@ -136,8 +153,8 @@ export class NodeJournalPersistence implements SharedPersistence {
     if (this.options.crashAt === stage) throw new Error(`simulated crash at ${stage}`);
   }
 
-  private async persistBlob(inode: StoredInode): Promise<string | undefined> {
-    if (inode.kind !== "file") return undefined;
+  private async persistBlob(inode: StoredInode): Promise<string | null> {
+    if (inode.kind !== "file") return null;
     const data = inode.data ?? new Uint8Array();
     const blob = sha256(data);
     const path = join(this.blobs, blob);
@@ -148,7 +165,7 @@ export class NodeJournalPersistence implements SharedPersistence {
   private async writeBlobsAndManifest(state: StoredState): Promise<StateManifest> {
     // Content-addressed files are durable before the manifest refers to them; sort entries for reproducible checksums.
     const inodes: ManifestInode[] = [];
-    for (const inode of [...state.inodes.values()].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }))) {
+    for (const inode of [...state.inodes.values()].sort((a, b) => a.id.localeCompare(b.id, [], { numeric: true }))) {
       const blob = await this.persistBlob(inode);
       inodes.push({
         id: inode.id,
@@ -180,12 +197,12 @@ export class NodeJournalPersistence implements SharedPersistence {
 
   private async currentGeneration(): Promise<number | null> {
     try {
-      const value = JSON.parse(await readFile(this.current, "utf8")) as { schema?: number; generation?: number };
+      const value = record(parseJson(await readFile(this.current, "utf8")));
       return value.schema === 1 && typeof value.generation === "number" && Number.isSafeInteger(value.generation) && value.generation >= 0
         ? value.generation
         : null;
     } catch (error) {
-      if ((error as { code?: string }).code === "ENOENT") return null;
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
       return null;
     }
   }
@@ -199,8 +216,8 @@ export class NodeJournalPersistence implements SharedPersistence {
     return null;
   }
 
-  private async readBlob(inode: ManifestInode): Promise<Uint8Array | undefined> {
-    if (inode.kind !== "file") return undefined;
+  private async readBlob(inode: ManifestInode): Promise<Uint8Array | null> {
+    if (inode.kind !== "file") return null;
     if (!inode.blob) throw new Error("file inode has no content hash");
     const data = Uint8Array.from(await readFile(join(this.blobs, inode.blob)));
     if (sha256(data) !== inode.blob) throw new Error("file inode checksum does not match");
@@ -209,12 +226,11 @@ export class NodeJournalPersistence implements SharedPersistence {
 
   private async readGeneration(generation: number): Promise<StoredState | null> {
     try {
-      const manifest = JSON.parse(
-        await readFile(join(this.generations, manifestName(generation)), "utf8"),
-      ) as StateManifest;
-      const { checksum, ...payload } = manifest;
-      if (manifest.schema !== SHARED_FS_SCHEMA || manifest.generation !== generation) return null;
+      const raw = record(parseJson(await readFile(join(this.generations, manifestName(generation)), "utf8")));
+      const { checksum, ...payload } = raw;
       if (sha256(JSON.stringify(payload)) !== checksum) return null;
+      const manifest = decodeManifest(raw);
+      if (manifest.generation !== generation) return null;
       const inodes = new Map<string, StoredInode>();
       for (const inode of manifest.inodes) {
         const data = await this.readBlob(inode);
