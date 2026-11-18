@@ -63,6 +63,7 @@ const cleanEnvironment = (
 };
 
 export function planNeruBoot(options: NeruBootOptions = {}): NeruBootPlan {
+  // Only proof-of-concept boots pass an initramfs; live boots pass the selected authority or local root to the host environment.
   const artefacts = artifactPaths(options.artifactRoot);
   const executable = resolveLinuxRuntime(options.linuxRuntime);
   const kernel = resolve(options.kernel ?? artefacts.kernel);
