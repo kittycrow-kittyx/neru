@@ -3,4 +3,4 @@
 	url = https://github.com/joelseverin/linux-wasm.git
 [submodule "vendor/nemunemu"]
 	path = vendor/nemunemu
-	url = https://github.com/kitty-crow/nemunemu.git
+	url = https://github.com/kittycrow-kittyx/nemunemu.git
