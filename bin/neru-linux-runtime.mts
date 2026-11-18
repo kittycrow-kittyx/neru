@@ -171,6 +171,7 @@ const flushUnmarkedConsole = (): void => {
   pendingConsole = pendingConsole.slice(visibleEnd);
 };
 
+// A shutdown marker can span worker messages; emit only the confirmed console bytes and stop on a complete valid marker.
 const writeGuestConsole = (message: string): void => {
   if (shuttingDown) return;
 

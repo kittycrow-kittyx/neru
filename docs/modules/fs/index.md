@@ -14,3 +14,5 @@ Import the public authority interfaces from this module. Implementations reside 
 - Protocol types: `SharedKind`, `InodeMetadata`, `SharedEntry`, `StoredInode`, `ManifestInode`, `SharedSnapshot`, `SharedOperation`, `SharedTransaction`, `SharedCommitResult`, `LeaseRequest`, `Lease`, `LockRequest`, `AdvisoryLock`, `ConflictDetail`, `PERSISTENT_ROOTS`, `KERNEL_LOCAL_ROOTS`.
 
 Additional contracts and defaults: `GenerationMetadata`, `defaultFetchOptions`, `bridgeOptions`.
+
+`StoredState` represents the authority's in-memory generation; `StateManifest` represents its journal metadata and content-addressed inode records. Both share the generation identity contract in [protocol](protocol.md).
