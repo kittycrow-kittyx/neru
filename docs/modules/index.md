@@ -17,3 +17,5 @@
 - [Server](fs/server.md): `SharedFsHttpServer`.
 - [Protocol](fs/protocol.md): `SHARED_FS_SCHEMA`, `SharedFsError`, `decodeBytes`, `encodeBytes`, `isKernelLocalPath`, `isPersistentPath`, `normaliseSharedPath`.
 - Protocol types: `SharedKind`, `InodeMetadata`, `SharedEntry`, `StoredInode`, `ManifestInode`, `SharedSnapshot`, `SharedOperation`, `SharedTransaction`, `SharedCommitResult`, `LeaseRequest`, `Lease`, `LockRequest`, `AdvisoryLock`, `ConflictDetail`, `PERSISTENT_ROOTS`, `KERNEL_LOCAL_ROOTS`.
+
+Default input factories: `defaultBootOptions`, `defaultBuildOptions` and `defaultBrowserBootOptions`.

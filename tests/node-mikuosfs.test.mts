@@ -22,7 +22,7 @@ const put = (memory: WebAssembly.Memory, pointer: number, value: string) => {
 const get = (memory: WebAssembly.Memory, pointer: number) => {
   const bytes = new Uint8Array(memory.buffer);
   let end = pointer;
-  while (bytes[end] !== 0) end++;
+  while ((bytes[end] ?? 0) !== 0) end++;
   return decoder.decode(bytes.subarray(pointer, end));
 };
 

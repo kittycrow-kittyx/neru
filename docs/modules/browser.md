@@ -9,3 +9,5 @@
 - `NeruBrowserMachine` exposes the keyboard input and termination interface.
 
 The remote guest filesystem transport is separate from these host boot functions.
+
+`defaultBrowserBootOptions()` constructs the explicit defaults; callers can spread these and override the required settings.

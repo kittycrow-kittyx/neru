@@ -36,3 +36,5 @@ export type {
 } from "./browser.js";
 
 export { defaultBootOptions, defaultBuildOptions } from "./types.js";
+
+export { defaultBrowserBootOptions } from "./browser.js";

@@ -6,33 +6,33 @@ export interface NeruBrowserMachine {
 }
 
 export interface NeruBrowserBootOptions {
-  base?: string | URL;
-  runtimeUrl?: string | URL;
-  workerUrl?: string | URL;
-  kernelUrl?: string | URL;
+  base: string | URL | null;
+  runtimeUrl: string | URL | null;
+  workerUrl: string | URL | null;
+  kernelUrl: string | URL | null;
   /** Explicitly set only for the legacy proof-of-concept image. */
-  initramfsUrl?: string | URL;
-  filesystemEndpoint?: string;
-  filesystemToken?: string;
-  filesystemClientId?: string;
-  variant?: NeruVariant;
-  commandLine?: string;
-  log?: (message: string) => void;
-  write?: (message: string) => void;
-  fetcher?: typeof fetch;
-  runtime?: NeruLinuxBrowserRuntime;
-  compileKernel?: (bytes: ArrayBuffer) => Promise<WebAssembly.Module>;
-  crossOriginIsolated?: boolean;
+  initramfsUrl: string | URL | null;
+  filesystemEndpoint: string | null;
+  filesystemToken: string | null;
+  filesystemClientId: string | null;
+  variant: NeruVariant | null;
+  commandLine: string | null;
+  log: ((message: string) => void) | null;
+  write: ((message: string) => void) | null;
+  fetcher: typeof fetch | null;
+  runtime: NeruLinuxBrowserRuntime | null;
+  compileKernel: ((bytes: ArrayBuffer) => Promise<WebAssembly.Module>) | null;
+  crossOriginIsolated: boolean | null;
 }
 
 export interface NeruBrowserBootPlan {
   runtimeUrl: URL;
   workerUrl: URL;
   kernelUrl: URL;
-  initramfsUrl?: URL;
-  filesystemEndpoint?: string;
-  filesystemToken?: string;
-  filesystemClientId?: string;
+  initramfsUrl: URL | null;
+  filesystemEndpoint: string | null;
+  filesystemToken: string | null;
+  filesystemClientId: string | null;
   variant: NeruVariant;
   commandLine: string;
 }
@@ -51,13 +51,9 @@ export type NeruLinuxBrowserRuntime = (
   write: (message: string) => void,
 ) => Promise<UpstreamLinuxMachine>;
 
-interface TransferableArrayBuffer extends ArrayBuffer {
-  transfer?(newLength?: number): ArrayBuffer;
-}
-
 const installArrayBufferTransfer = (): void => {
-  const prototype = ArrayBuffer.prototype as TransferableArrayBuffer;
-  if (typeof prototype.transfer === "function") return;
+  const prototype = ArrayBuffer.prototype;
+  if (Object.hasOwn(prototype, "transfer")) return;
 
   Object.defineProperty(prototype, "transfer", {
     configurable: true,
@@ -77,8 +73,12 @@ const installArrayBufferTransfer = (): void => {
 const absolute = (value: string | URL, base: URL): URL =>
   value instanceof URL ? value : new URL(value, base);
 
+export function defaultBrowserBootOptions(): NeruBrowserBootOptions {
+  return { base: null, runtimeUrl: null, workerUrl: null, kernelUrl: null, initramfsUrl: null, filesystemEndpoint: null, filesystemToken: null, filesystemClientId: null, variant: null, commandLine: null, log: null, write: null, fetcher: null, runtime: null, compileKernel: null, crossOriginIsolated: null };
+}
+
 export function planNeruBrowserBoot(
-  options: NeruBrowserBootOptions = {},
+  options: NeruBrowserBootOptions = defaultBrowserBootOptions(),
 ): NeruBrowserBootPlan {
   const documentBase = !globalThis.document
     ? new URL("http://localhost/")
@@ -92,10 +92,10 @@ export function planNeruBrowserBoot(
     runtimeUrl: absolute(options.runtimeUrl ?? "linux.js", base),
     workerUrl: absolute(options.workerUrl ?? "linux-worker.js", base),
     kernelUrl: absolute(options.kernelUrl ?? "vmlinux.wasm", base),
-    ...(initramfsUrl ? { initramfsUrl } : {}),
-    ...(options.filesystemEndpoint ? { filesystemEndpoint: options.filesystemEndpoint } : {}),
-    ...(options.filesystemToken ? { filesystemToken: options.filesystemToken } : {}),
-    ...(options.filesystemClientId ? { filesystemClientId: options.filesystemClientId } : {}),
+    initramfsUrl,
+    filesystemEndpoint: options.filesystemEndpoint,
+    filesystemToken: options.filesystemToken,
+    filesystemClientId: options.filesystemClientId,
     variant,
     commandLine: options.commandLine ?? (
       initramfsUrl
@@ -152,7 +152,7 @@ function setFilesystemConfig(plan: NeruBrowserBootPlan): void {
 }
 
 export async function bootNeruBrowser(
-  options: NeruBrowserBootOptions = {},
+  options: NeruBrowserBootOptions = defaultBrowserBootOptions(),
 ): Promise<NeruBrowserMachine> {
   requireBrowserCapabilities(options);
   installArrayBufferTransfer();

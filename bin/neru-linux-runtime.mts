@@ -3,7 +3,6 @@
 import { optionValue } from "../src/args.js";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { runInThisContext } from "node:vm";
 import { Worker as NodeWorker } from "node:worker_threads";
 import type { FilesystemConfig, WorkerBootstrapData, WorkerRequest, WorkerReply } from "../runtime/worker-protocol.mts";
 
@@ -34,15 +33,15 @@ if (args.includes("--help")) {
 
 const kernelPath = value("--kernel");
 const initramfsPath = value("--initramfs");
-const variant = value("--variant") ?? process.env.NERU_LINUX_VARIANT ?? "wasm32_nommu";
-const verbose = process.env.NERU_VERBOSE === "1";
+const variant = value("--variant") ?? (process.env.NERU_LINUX_VARIANT ?? null) ?? "wasm32_nommu";
+const verbose = (process.env.NERU_VERBOSE ?? null) === "1";
 if (!kernelPath) throw new Error("--kernel is required");
 if (variant !== "wasm32_nommu" && variant !== "wasm64_nommu") {
   throw new Error(`Unsupported Linux-WASM variant: ${variant}`);
 }
 
-const filesystemRoot = process.env.NERU_FS_ROOT;
-const filesystemEndpoint = process.env.NERU_FS_ENDPOINT;
+const filesystemRoot = (process.env.NERU_FS_ROOT ?? null);
+const filesystemEndpoint = (process.env.NERU_FS_ENDPOINT ?? null);
 if (!initramfsPath && !filesystemRoot && !filesystemEndpoint) {
   throw new Error(
     "Kernel-only NERU boot requires NERU_FS_ROOT or NERU_FS_ENDPOINT so mikuosfs can mount the live userspace",
@@ -75,7 +74,7 @@ class WorkerAdapter {
   #onmessageerror: ErrorHandler | null = null;
   #onerror: ErrorHandler | null = null;
 
-  constructor(_url: string | URL, options: { name?: string } = {}) {
+  constructor(_url: string | URL, options: { name: string | null } = { name: null }) {
     this.#worker = new NodeWorker(WORKER_BOOTSTRAP, {
       ...(options.name == null ? {} : { name: options.name }),
       workerData: {
@@ -86,8 +85,8 @@ class WorkerAdapter {
 
     workers.add(this.#worker);
     this.#worker.once("exit", () => workers.delete(this.#worker));
-    this.#worker.on("message", (data: WorkerReply) => this.#onmessage?.({ data }));
-    this.#worker.on("messageerror", (error) => this.#onmessageerror?.(error));
+    this.#worker.on("message", (data: WorkerReply) => { if (this.#onmessage) this.#onmessage({ data }); });
+    this.#worker.on("messageerror", (error: Error) => { if (this.#onmessageerror) this.#onmessageerror(error); });
     this.#worker.on("error", (error) => {
       if (shuttingDown) return;
       if (this.#onerror) this.#onerror(error);
@@ -210,7 +209,7 @@ const writeGuestConsole = (message: string): void => {
       continue;
     }
 
-    void stopLinux(Number.parseInt(statusText, 10));
+    stopLinux(Number.parseInt(statusText, 10)).catch((error: Error) => { process.stderr.write(error.message); process.exit(1); });
     return;
   }
 };
@@ -222,13 +221,12 @@ process.once("SIGTERM", () => {
 });
 
 const upstreamSource = await readFile(UPSTREAM_LINUX, "utf8");
-runInThisContext(
-  `${upstreamSource}\n;globalThis.__neruLinux = linux;`,
-  { filename: UPSTREAM_LINUX },
-);
-const globals = globalThis as typeof globalThis & { __neruLinux?: LinuxLauncher };
+Object.defineProperty(globalThis, "__neruLinux", { value: null, writable: true, configurable: true });
+const launch = new Function(`${upstreamSource}\n;globalThis.__neruLinux = linux;\n//# sourceURL=${UPSTREAM_LINUX}`) as () => void;
+launch();
+const globals = globalThis as typeof globalThis & { __neruLinux: LinuxLauncher | null };
 const linuxValue = globals.__neruLinux;
-delete globals.__neruLinux;
+Reflect.deleteProperty(globals, "__neruLinux");
 if (typeof linuxValue !== "function") {
   throw new Error("Pinned Linux-WASM runtime did not expose its Linux launcher");
 }

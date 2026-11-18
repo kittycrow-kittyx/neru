@@ -26,7 +26,7 @@ const decoder = new TextDecoder("utf-8");
 type GuestWord = number | bigint;
 
 const errorCode = (error: Error): number => {
-  const code = "code" in error ? error.code : null;
+  const code = (error as NodeJS.ErrnoException).code ?? null;
   return typeof code === "string" && Object.hasOwn(ERRNO, code)
     ? ERRNO[code as keyof typeof ERRNO] : ERRNO.EIO;
 };
@@ -35,7 +35,7 @@ const cstring = (memory: WebAssembly.Memory, pointerValue: GuestWord) => {
   const pointer = Number(pointerValue);
   const bytes = new Uint8Array(memory.buffer);
   let end = pointer;
-  while (end < bytes.length && bytes[end] !== 0) end++;
+  while (end < bytes.length && (bytes[end] ?? 0) !== 0) end++;
   if (end === bytes.length) {
     throw Object.assign(new Error("unterminated guest path"), { code: "ENAMETOOLONG" });
   }
@@ -124,7 +124,7 @@ export function createNodeMikuosFs(rootValue: string) {
         .filter((name) => name !== ".thistle-meta.json" && name !== ".thistle-meta.json.tmp")
         .sort();
       if (!Number.isSafeInteger(index) || index < 0) return ERRNO.EIO;
-      const entry = entries[index];
+      const entry = entries[index] ?? null;
       if (entry == null) return 0;
       return writeBytes(
         memory,

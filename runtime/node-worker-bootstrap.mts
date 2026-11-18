@@ -2,7 +2,6 @@
 
 import { webcrypto } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { runInThisContext } from "node:vm";
 import { parentPort, workerData } from "node:worker_threads";
 import { createNodeMikuosFs } from "./node-mikuosfs.mts";
 import type { WorkerBootstrapData, WorkerRequest, WorkerReply } from "./worker-protocol.mts";
@@ -56,7 +55,7 @@ Object.defineProperty(selfShim, "onmessage", {
   set: (handler: MessageHandler | null) => {
     onmessage = handler;
     while (onmessage && pending.length) {
-      const data = pending.shift();
+      const data = pending.shift() ?? null;
       if (data) onmessage({ data });
     }
   },
@@ -107,4 +106,5 @@ if (!upstream.includes(marker)) {
   throw new Error("Pinned Linux-WASM worker no longer exposes the expected driver hook marker");
 }
 const source = upstream.replace(marker, hooks + marker);
-runInThisContext(source, { filename: upstreamWorker });
+const execute = new Function(`${source}\n//# sourceURL=${upstreamWorker}`) as () => void;
+execute();
