@@ -24,7 +24,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "@kitty-crow/code-guards": "git+https://github.com/kitty-crow/code-guards.git#d1ce06c6b4a71e5f94ca97ba4b0f6780408aa3f6"
+    "@kitty-crow/code-guards": "git+https://github.com/kitty-crow/code-guards.git#a790861394c7312ff512ec9b03346e1fc8268188"
   },
   "dependencies": {
     "ts-node": "^10.9.2",
